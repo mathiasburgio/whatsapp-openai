@@ -3,9 +3,232 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+    <title>Conversaciones · WhatsApp</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --verde: #008069;
+            --texto: #111b21;
+            --secundario: #667781;
+            --borde: #e9edef;
+            --superficie: #f0f2f5;
+            --bs-body-color: var(--texto);
+            --bs-body-font-family: "Segoe UI", Arial, sans-serif;
+        }
+
+        body { margin: 0; background: #dfe5e7; }
+        button, input, textarea { font: inherit; }
+        [data-estado="login"] #vista-conversaciones,
+        [data-estado="conversacion"] #vista-login { display: none; }
+
+        .vista-login {
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: linear-gradient(var(--verde) 0 140px, #eef1f2 140px);
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 380px;
+            padding: 36px;
+            border: 1px solid var(--borde);
+            border-radius: 12px;
+            background: #fff;
+            box-shadow: 0 8px 32px #111b210b;
+        }
+
+        .form-label { font-size: 14px; font-weight: 500; }
+        .form-control { min-height: 44px; border-color: #d8dfe3; }
+        .form-control:focus {
+            border-color: var(--verde);
+            box-shadow: 0 0 0 3px #00806918;
+        }
+
+        .btn-enviar {
+            --bs-btn-color: #fff;
+            --bs-btn-bg: var(--verde);
+            --bs-btn-border-color: var(--verde);
+            --bs-btn-hover-color: #fff;
+            --bs-btn-hover-bg: #006b58;
+            --bs-btn-hover-border-color: #006b58;
+            --bs-btn-active-color: #fff;
+            --bs-btn-active-bg: #005a4a;
+            --bs-btn-active-border-color: #005a4a;
+            --bs-btn-focus-shadow-rgb: 0, 128, 105;
+            min-height: 44px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .vista-conversaciones {
+            display: grid;
+            grid-template-columns: 350px minmax(0, 1fr);
+            width: min(1440px, calc(100% - 48px));
+            height: calc(100vh - 48px);
+            height: calc(100dvh - 48px);
+            margin: 24px auto;
+            overflow: hidden;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 6px 24px #111b2114;
+        }
+
+        .columna-conversaciones {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            border-right: 1px solid #d8dfe3;
+        }
+
+        .buscador { padding: 16px; border-bottom: 1px solid var(--borde); }
+        .buscador .input-group { min-height: 40px; }
+        .buscador .input-group-text,
+        .buscador .form-control { background: var(--superficie); border: 0; }
+        .buscador .input-group-text { color: var(--secundario); padding-left: 14px; }
+        .buscador .form-control { min-height: 40px; font-size: 13px; }
+
+        .lista-conversaciones { flex: 1; overflow-y: auto; }
+        .conversacion {
+            display: block;
+            width: 100%;
+            padding: 18px 20px;
+            border: 0;
+            border-bottom: 1px solid var(--borde);
+            background: #fff;
+            color: var(--texto);
+            text-align: left;
+        }
+        .conversacion:hover { background: #f5f6f6; }
+        .conversacion.seleccionada { background: #eaf4f0; box-shadow: inset 3px 0 var(--verde); }
+        .conversacion:focus-visible { outline: 2px solid var(--verde); outline-offset: -3px; }
+        .nombre-contacto { display: block; font-size: 15px; font-weight: 600; line-height: 1.4; }
+        .telefono-contacto { display: block; margin-top: 3px; color: var(--secundario); font-size: 12px; }
+        .estado-mensaje { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; color: var(--secundario); font-size: 12px; }
+        .estado-mensaje .separador { color: #b0bec5; }
+        .estado-leido { color: #1687a7; }
+        .tags-conversacion { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
+        .tag { border-radius: 5px; padding: 5px 8px; font-size: 11px; font-weight: 500; }
+        .lead-cold { background: #eaf2fb; color: #35659a; }
+        .lead-warm { background: #fff1d7; color: #855711; }
+        .lead-hot { background: #fce6e4; color: #a54239; }
+        .lead-handoff { background: #eee7f7; color: #735499; }
+        .bot-activo { background: #def2e8; color: #267553; }
+        .bot-inactivo { background: #e9edef; color: #596970; }
+        .tag .fa-circle { margin-right: 4px; font-size: 6px; vertical-align: 2px; }
+
+        .panel-conversacion { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+        .cabecera-conversacion { min-height: 73px; padding: 14px 28px; border-bottom: 1px solid var(--borde); background: var(--superficie); }
+        .cabecera-conversacion .telefono-contacto { font-size: 13px; }
+        .mensajes {
+            display: flex;
+            flex: 1;
+            flex-direction: column;
+            gap: 12px;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 32px clamp(20px, 5vw, 76px);
+            background-color: #efeae2;
+            background-image: radial-gradient(#b3a99820 1px, transparent 1px);
+            background-size: 18px 18px;
+        }
+        .mensaje {
+            position: relative;
+            max-width: min(80%, 460px);
+            padding: 10px 12px 7px;
+            border-radius: 8px;
+            box-shadow: 0 1px 2px #111b211a;
+            font-size: 14px;
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+        }
+        .mensaje-recibido { align-self: flex-start; border-top-left-radius: 0; background: #fff; }
+        .mensaje-enviado { align-self: flex-end; border-top-right-radius: 0; background: #d9fdd3; }
+        .mensaje p { margin: 0; white-space: pre-wrap; }
+        .mensaje-meta { display: flex; justify-content: flex-end; align-items: center; gap: 5px; margin-top: 4px; color: var(--secundario); font-size: 10px; }
+        .compositor { display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-top: 1px solid var(--borde); background: var(--superficie); }
+        .compositor textarea { height: 46px; min-height: 46px; resize: none; padding: 11px 14px; border: 0; border-radius: 8px; font-size: 14px; }
+        .compositor .btn { flex-shrink: 0; padding-inline: 20px; }
+        .lista-conversaciones, .mensajes { scrollbar-width: thin; scrollbar-color: #c5cece transparent; }
+
+        @media (max-width: 900px) {
+            .vista-conversaciones { width: 100%; height: 100vh; height: 100dvh; margin: 0; border-radius: 0; grid-template-columns: 300px minmax(0, 1fr); }
+            .mensaje { max-width: 90%; }
+        }
+        @media (max-width: 600px) {
+            .vista-conversaciones { grid-template-columns: 43% minmax(0, 1fr); }
+            .buscador { padding: 12px 8px; }
+            .buscador .input-group-text { padding-inline: 9px; font-size: 12px; }
+            .buscador .form-control { padding-left: 0; font-size: 12px; }
+            .conversacion { padding: 15px 12px; }
+            .nombre-contacto { font-size: 13px; }
+            .telefono-contacto { font-size: 11px; overflow-wrap: anywhere; }
+            .estado-mensaje { gap: 4px; font-size: 10px; }
+            .tag { padding: 4px 6px; font-size: 10px; }
+            .cabecera-conversacion { min-height: 65px; padding: 13px 14px; }
+            .cabecera-conversacion .telefono-contacto { font-size: 11px; }
+            .mensajes { gap: 10px; padding: 20px 12px; }
+            .mensaje { max-width: 96%; padding: 8px 10px 5px; font-size: 13px; }
+            .compositor { flex-wrap: wrap; gap: 8px; padding: 12px; }
+            .compositor textarea { width: 100%; font-size: 12px; }
+            .compositor .btn { margin-left: auto; padding-inline: 14px; min-height: 40px; font-size: 12px; }
+            .login-card { padding: 28px; }
+        }
+    </style>
 </head>
-<body>
-    
+<!-- La lógica de sesión cambiará data-estado a "conversacion". Por defecto se muestra el login. -->
+<body data-estado="login">
+    <main id="vista-login" class="vista-login" aria-label="Iniciar sesión">
+        <form id="form-login" class="login-card">
+            <div class="mb-4">
+                <label for="email" class="form-label">Email</label>
+                <input id="email" name="email" type="email" class="form-control" autocomplete="username" required>
+            </div>
+            <div class="mb-4">
+                <label for="contrasena" class="form-label">Contraseña</label>
+                <input id="contrasena" name="contrasena" type="password" class="form-control" autocomplete="current-password" required>
+            </div>
+            <button id="btn-iniciar-sesion" class="btn btn-enviar w-100" type="submit">Iniciar sesión</button>
+        </form>
+    </main>
+
+    <main id="vista-conversaciones" class="vista-conversaciones" aria-label="Conversaciones">
+        <aside class="columna-conversaciones" aria-label="Lista de conversaciones">
+            <div class="buscador">
+                <label for="buscar-conversacion" class="visually-hidden">Buscar conversación</label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i></span>
+                    <input id="buscar-conversacion" type="search" class="form-control" placeholder="Buscar conversación" autocomplete="off">
+                </div>
+            </div>
+
+            <div id="lista-conversaciones" class="lista-conversaciones"></div>
+        </aside>
+
+        <section class="panel-conversacion" aria-label="Conversación seleccionada">
+            <header class="cabecera-conversacion">
+                <span id="nombre-conversacion" class="nombre-contacto">Seleccioná una conversación</span>
+                <span id="telefono-conversacion" class="telefono-contacto"></span>
+            </header>
+
+            <div id="mensajes" class="mensajes" role="log" aria-label="Mensajes"></div>
+
+            <div class="compositor">
+                <label for="texto-mensaje" class="visually-hidden">Escribir un mensaje</label>
+                <textarea id="texto-mensaje" class="form-control" rows="1" placeholder="Escribí un mensaje" disabled></textarea>
+                <button id="btn-enviar-mensaje" type="button" class="btn btn-enviar" disabled>Enviar <i class="fa-solid fa-paper-plane ms-1" aria-hidden="true"></i></button>
+            </div>
+        </section>
+    </main>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/index.js"></script>
 </body>
 </html>

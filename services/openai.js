@@ -1,167 +1,251 @@
-const RESPONSES_API_URL = "https://api.openai.com/v1/responses";
-const CHAT_COMPLETIONS_API_URL = "https://api.openai.com/v1/chat/completions";
-const TRANSCRIPTIONS_API_URL = "https://api.openai.com/v1/audio/transcriptions";
+const Uso = require('../models/uso');
 
+const RESPONSES_API_URL = 'https://api.openai.com/v1/responses';
+const TRANSCRIPTIONS_API_URL = 'https://api.openai.com/v1/audio/transcriptions';
+const DECISIONS_API_URL = 'https://api.openai.com/v1/decisions';
+let registroPendiente = Promise.resolve();
 
-//configuracion por defecto. Se usa solo en "crearConfiguracion"
-const CONFIGURACION_POR_DEFECTO = Object.freeze({
-    modelo: process.env.OPENAI_MODEL || "gpt-6-luna",
-    modeloAudio: process.env.OPENAI_AUDIO_MODEL || "gpt-4o-mini-transcribe",
-    maxTokensSalida: 1000,
-    json: false
-});
-
-//devuelve la configuracion antes de llamar a la API
 function crearConfiguracion(opciones = {}) {
-    return {
-        ...CONFIGURACION_POR_DEFECTO,
-        modelo: process.env.OPENAI_MODEL || CONFIGURACION_POR_DEFECTO.modelo,
-        modeloAudio: process.env.OPENAI_AUDIO_MODEL || CONFIGURACION_POR_DEFECTO.modeloAudio,
-        ...opciones
+    const modelo = opciones.modelo || process.env.OPENAI_MODEL || 'gpt-6-luna';
+    if (typeof modelo !== 'string' || !modelo.trim()) throw new Error('Indicá un modelo válido.');
+    const configuracion = {
+        maxTokensSalida: 1000, json: false,
+        razonamiento: /^gpt-[56]/.test(modelo) ? 'low' : undefined,
+        ...opciones, modelo,
     };
+    if (!Number.isInteger(configuracion.maxTokensSalida) || configuracion.maxTokensSalida < 1) {
+        throw new Error('maxTokensSalida debe ser un entero positivo.');
+    }
+    return configuracion;
 }
 
-//devuelve los headers necesarios para las solicitudes JSON a la API de OpenAI
-function headersJson() {
-    if(!process.env.OPENAI_API_KEY) throw new Error("Falta definir OPENAI_API_KEY en las variables de entorno.");
-    return {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-    };
+function validarTexto(texto) {
+    if (typeof texto !== 'string' || !texto.trim()) throw new Error('El texto no puede estar vacío.');
+    if (texto.length > 30000) throw new Error('El texto no puede superar los 30000 caracteres.');
 }
 
-//devuelve un objeto con el uso de tokens de la respuesta de OpenAI
+function crearCuerpo(input, configuracion) {
+    const cuerpo = { model: configuracion.modelo, input, max_output_tokens: configuracion.maxTokensSalida, store: false };
+    if (configuracion.instrucciones !== undefined) {
+        validarTexto(configuracion.instrucciones);
+        cuerpo.instructions = configuracion.instrucciones;
+    }
+    if (configuracion.razonamiento) cuerpo.reasoning = { effort: configuracion.razonamiento };
+    if (configuracion.json) {
+        cuerpo.text = { format: { type: 'json_object' } };
+        cuerpo.instructions = `Respondé en formato JSON.\n${cuerpo.instructions || ''}`;
+    }
+    return cuerpo;
+}
+
 function obtenerUso(datos) {
-    return {
-        entrada: datos.usage?.input_tokens || datos.usage?.prompt_tokens || 0,
-        salida: datos.usage?.output_tokens || datos.usage?.completion_tokens || 0,
-        total: datos.usage?.total_tokens || 0
-    };
+    const entrada = datos?.usage?.input_tokens ?? datos?.usage?.prompt_tokens ?? null;
+    const salida = datos?.usage?.output_tokens ?? datos?.usage?.completion_tokens ?? null;
+    const total = datos?.usage?.total_tokens ?? (entrada !== null && salida !== null ? entrada + salida : null);
+    return { entrada, salida, total };
 }
 
-//consulta la API de OpenAI con el cuerpo proporcionado y devuelve el resultado procesado
-//esta funcion es la unica q verdaderamente llama al LLM
-async function consultarOpenAI(cuerpo, signal) {
-    const headers = headersJson();
-    const inicio = performance.now();
-    const respuesta = await fetch(RESPONSES_API_URL, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(cuerpo),
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000)
+// Comprobar y registrar juntos evita que llamadas simultáneas del servidor excedan el cupo.
+// Esta cola es local: si se ejecutan varios procesos, el control debe hacerse en MongoDB.
+function registrarUso(tipo, modelo, segundos, configuracion, signal, entrada) {
+    const registro = registroPendiente.then(async () => {
+        if (Uso.db.readyState !== 1) throw new Error('MongoDB debe estar conectado para registrar el uso de OpenAI.');
+        const ahora = new Date();
+        const inicioMes = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1));
+        const [consumo = { consultas: 0, busquedas: 0, segundos: 0 }] = await Uso.aggregate([
+            { $match: { servicio: 'openai', createdAt: { $gte: inicioMes }, estado: { $ne: 'rechazado' } } },
+            { $group: {
+                _id: null,
+                consultas: { $sum: { $cond: [{ $or: ['$esTexto', '$esImagen'] }, 1, 0] } },
+                busquedas: { $sum: { $cond: ['$esBusquedaWeb', 1, 0] } },
+                segundos: { $sum: { $cond: ['$esAudio', '$segundos', 0] } },
+            } },
+        ]);
+        const limiteTexto = Number(process.env.LLM_MONTHLY_TEXT_QUERY_LIMIT ?? 1000);
+        const limiteWeb = Number(process.env.LLM_MONTHLY_WEB_SEARCH_LIMIT ?? 100);
+        const limiteAudio = Number(process.env.LLM_MONTHLY_AUDIO_SECONDS_LIMIT ?? 3600);
+        if (![limiteTexto, limiteWeb, limiteAudio].every(valor => Number.isFinite(valor) && valor >= 0)) {
+            throw new Error('Los límites mensuales deben ser números mayores o iguales a cero.');
+        }
+        if (tipo !== 'audio' && consumo.consultas + 1 > limiteTexto) throw new Error('Se alcanzó el límite mensual de consultas de OpenAI.');
+        if (tipo === 'web' && consumo.busquedas + 1 > limiteWeb) throw new Error('Se alcanzó el límite mensual de búsquedas web.');
+        if (tipo === 'audio' && consumo.segundos + segundos > limiteAudio) throw new Error('Se alcanzó el límite mensual de segundos de audio.');
+        signal.throwIfAborted();
+        return Uso.create({
+            ...entrada,
+            servicio: 'openai', modelo, estado: 'pendiente', segundos,
+            esTexto: tipo === 'texto' || tipo === 'web' || tipo === 'decision', esImagen: tipo === 'imagen',
+            esBusquedaWeb: tipo === 'web', esAudio: tipo === 'audio',
+            esDecision: tipo === 'decision',
+            conversacionId: configuracion.conversacionId,
+        });
     });
-    const datos = await respuesta.json();
-    if(!respuesta.ok) throw new Error(datos.error?.message || "No fue posible consultar OpenAI.");
-    if(datos.status === "incomplete" || datos.status === "failed") throw new Error("OpenAI no pudo completar la respuesta.");
-    const contenidos = (datos.output || []).filter((item) => item.type === "message").flatMap((item) => item.content || []);
-
-    return {
-        resultado: datos.output_text || contenidos.filter((item) => item.type === "output_text").map((item) => item.text).join("\n"),
-        fuentes: contenidos.flatMap((item) => item.annotations || []).filter((item) => item.type === "url_citation").map(({url, title}) => ({url, titulo: title || url})),
-        tiempoRespuestaMs: Math.round(performance.now() - inicio),
-        tokensGastados: obtenerUso(datos)
-    };
+    registroPendiente = registro.catch(() => {});
+    return registro;
 }
 
-//llama a consultarOpenAI por texto (tipica consulta tipo chat)
+// Todas las APIs pasan por acá: límite, llamada y guardado del uso.
+async function consultarOpenAI(url, cuerpo, configuracion, tipo, segundos = 0, entrada = {}) {
+    if (!process.env.OPENAI_API_KEY?.trim()) throw new Error('Falta definir OPENAI_API_KEY.');
+    const signal = configuracion.signal
+        ? AbortSignal.any([configuracion.signal, AbortSignal.timeout(90000)])
+        : AbortSignal.timeout(90000);
+    signal.throwIfAborted();
+    const uso = await registrarUso(tipo, cuerpo.model || configuracion.modelo, segundos, configuracion, signal, entrada);
+    const inicio = performance.now();
+    let respuesta, datos, enviado = false;
+    try {
+        signal.throwIfAborted();
+        const headers = { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` };
+        if (tipo !== 'audio') headers['Content-Type'] = 'application/json';
+        enviado = true;
+        respuesta = await fetch(url, {
+            method: 'POST', headers, body: tipo === 'audio' ? cuerpo : JSON.stringify(cuerpo), signal,
+        });
+        datos = await respuesta.json();
+        const tokens = obtenerUso(datos);
+        uso.tokensEntrada = tokens.entrada;
+        uso.tokensSalida = tokens.salida;
+        uso.tokensTotal = tokens.total;
+        if (tipo === 'decision') uso.usoDetalle = datos.usage;
+        if (!respuesta.ok) throw new Error(datos.error?.message || 'No fue posible consultar OpenAI.');
+        if (datos.status === 'incomplete' || datos.status === 'failed' || datos.error) throw new Error('OpenAI no pudo completar la respuesta.');
+        if (tipo === 'decision') {
+            uso.respuestasDecision = datos.answers;
+            const resultado = datos.answers?.[0];
+            if (!Array.isArray(datos.answers) || datos.answers.length !== 1 || !['choice', 'refusal'].includes(resultado?.type)) {
+                throw new Error('OpenAI no devolvió una decisión válida.');
+            }
+            if (resultado.type === 'choice' && (!cuerpo.questions[0].choices.some(opcion => opcion.value === resultado.choice)
+                || !Number.isFinite(resultado.confidence) || resultado.confidence < 0 || resultado.confidence > 1)) {
+                throw new Error('OpenAI devolvió una opción o confianza inválida.');
+            }
+            // Una negativa es una respuesta tipada y puede consumir tokens.
+            uso.estado = 'completado';
+            return { resultado, tokensGastados: tokens, uso: datos.usage, modelo: datos.model || cuerpo.model,
+                tiempoRespuestaMs: Math.round(performance.now() - inicio) };
+        }
+        const contenidos = (datos.output || []).filter(item => item.type === 'message').flatMap(item => item.content || []);
+        if (contenidos.some(item => item.type === 'refusal')) throw new Error('OpenAI rechazó la solicitud.');
+        const resultado = tipo === 'audio' ? datos.text : datos.output_text || contenidos.filter(item => item.type === 'output_text').map(item => item.text).join('\n');
+        if (typeof resultado !== 'string' || !resultado.trim()) throw new Error('OpenAI no devolvió contenido.');
+        if (configuracion.json && tipo !== 'audio') JSON.parse(resultado);
+        uso.estado = 'completado';
+        return {
+            resultado, tokensGastados: tokens, tiempoRespuestaMs: Math.round(performance.now() - inicio),
+            fuentes: contenidos.flatMap(item => item.annotations || []).filter(item => item.type === 'url_citation').map(({ url, title }) => ({ url, titulo: title || url })),
+            ...(tipo === 'audio' && { segundosAudio: segundos }),
+        };
+    } catch (error) {
+        // Los errores de red conservan cupo: la solicitud puede haber sido procesada.
+        const rechazado = !enviado || (respuesta?.status >= 400 && respuesta.status < 500 && respuesta.status !== 408 && !datos?.usage);
+        uso.estado = rechazado ? 'rechazado' : datos?.status === 'incomplete' ? 'incompleto' : 'fallido';
+        throw error;
+    } finally {
+        uso.tiempoRespuestaMs = Math.round(performance.now() - inicio);
+        await uso.save();
+    }
+}
+
 async function procesarTexto(texto, opciones = {}) {
+    validarTexto(texto);
     const configuracion = crearConfiguracion(opciones);
-    return consultarOpenAI({
-        model: configuracion.modelo,
-        max_output_tokens: configuracion.maxTokensSalida,
-        ...(configuracion.json && {text: {format: {type: "json_object"}}}),
-        ...(configuracion.instrucciones && {instructions: configuracion.instrucciones}),
-        // JSON mode exige que también el input mencione JSON, aunque haya instructions.
-        input: configuracion.json ? `Respondé en formato JSON.\n\n${texto}` : texto
-    }, configuracion.signal);
-}
-
-//llama a consultarOpenAI por imagen
-async function procesarImagen(imagenUrl, prompt = "Describí esta imagen.", opciones = {}) {
-    const configuracion = crearConfiguracion(opciones);
-    return consultarOpenAI({
-        model: configuracion.modelo,
-        max_output_tokens: configuracion.maxTokensSalida,
-        input: [{role: "user", content: [{type: "input_text", text: prompt}, {type: "input_image", image_url: imagenUrl}]}]
+    return consultarOpenAI(RESPONSES_API_URL, crearCuerpo(texto, configuracion), configuracion, 'texto', 0, {
+        texto, contexto: configuracion.instrucciones,
     });
 }
 
-async function procesarAudio(audioBase64, formato = "webm", prompt = "Transcribí este audio.", opciones = {}) {
-    const configuracion = crearConfiguracion(opciones);
-    const headers = headersJson();
-    const segundosAudio = await duracionAudio.obtenerSegundosAudio(Buffer.from(audioBase64, "base64"));
-    const inicio = performance.now();
-    const respuesta = await fetch(CHAT_COMPLETIONS_API_URL, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-            model: configuracion.modeloAudio,
-            max_tokens: configuracion.maxTokensSalida,
-            ...(configuracion.json && {response_format: {type: "json_object"}}),
-            messages: [{
-                role: "user",
-                content: [
-                    {type: "text", text: prompt},
-                    {type: "input_audio", input_audio: {data: audioBase64, format: formato}}
-                ]
-            }]
-        })
+async function procesarDecision(prompt, opciones, configuracion = {}) {
+    validarTexto(prompt);
+    if (!configuracion || typeof configuracion !== 'object' || Array.isArray(configuracion)) {
+        throw new Error('La configuración de Decisions debe ser un objeto.');
+    }
+    if (!Array.isArray(opciones) || opciones.length < 2 || opciones.length > 255) {
+        throw new Error('Decisions requiere entre 2 y 255 opciones.');
+    }
+    const choices = opciones.map(opcion => {
+        const choice = typeof opcion === 'string' || typeof opcion === 'boolean' ? { value: opcion } : opcion;
+        if (!choice || !['string', 'boolean'].includes(typeof choice.value)) {
+            throw new Error('Cada opción debe ser un string, booleano o un objeto con value y description opcional.');
+        }
+        if (typeof choice.value === 'string') validarTexto(choice.value);
+        if (choice.description !== undefined) validarTexto(choice.description);
+        return { value: choice.value, ...(choice.description !== undefined && { description: choice.description }) };
     });
-    const datos = await respuesta.json();
-    if(!respuesta.ok) throw new Error(datos.error?.message || "No fue posible procesar el audio.");
-
-    return {
-        resultado: datos.choices?.[0]?.message?.content || "",
-        tiempoRespuestaMs: Math.round(performance.now() - inicio),
-        tokensGastados: obtenerUso(datos),
-        segundosAudio
-    };
+    if (new Set(choices.map(opcion => opcion.value)).size !== choices.length) throw new Error('Las opciones deben ser únicas.');
+    const modelo = configuracion.modelo || process.env.OPENAI_DECISIONS_MODEL || 'gpt-6-luna';
+    validarTexto(modelo);
+    const instrucciones = configuracion.instrucciones ?? 'Elegí la opción que mejor corresponda al texto de entrada.';
+    validarTexto(instrucciones);
+    const nombre = configuracion.nombre ?? 'decision';
+    validarTexto(nombre);
+    for (const parametro of ['json', 'maxTokensSalida', 'razonamiento']) {
+        if (configuracion[parametro] !== undefined) throw new Error(`Decisions no admite la opción ${parametro}.`);
+    }
+    const cuerpo = { model: modelo, input: prompt, questions: [{ type: 'choice', name: nombre, instructions: instrucciones, choices }] };
+    if (configuracion.safetyIdentifier !== undefined) {
+        validarTexto(configuracion.safetyIdentifier);
+        if (configuracion.safetyIdentifier.length > 128) throw new Error('safetyIdentifier no puede superar los 128 caracteres.');
+        cuerpo.safety_identifier = configuracion.safetyIdentifier;
+    }
+    return consultarOpenAI(DECISIONS_API_URL, cuerpo, { ...configuracion, modelo }, 'decision', 0, {
+        texto: prompt, contexto: instrucciones, preguntasDecision: cuerpo.questions,
+    });
 }
 
-// El endpoint de transcripción acepta los archivos webm/mp4 que graba el navegador.
-async function transcribirAudio(buffer, mimeType = "audio/webm", opciones = {}) {
-    const inicio = performance.now();
-    const modelo = opciones.modelo || process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
-    const tipo = mimeType.split(";")[0];
-    const extensiones = {"audio/webm": "webm", "audio/mp4": "mp4", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/wav": "wav", "audio/x-wav": "wav"};
-    if(!extensiones[tipo]) throw new Error("Formato de audio no compatible con la transcripción.");
-    const {Authorization} = headersJson();
-    const datos = new FormData();
-    datos.append("file", new Blob([buffer], {type: tipo}), `dictado.${extensiones[tipo]}`);
-    datos.append("model", modelo);
-    datos.append("language", "es");
-    if(typeof opciones.prompt === "string" && opciones.prompt.trim()) datos.append("prompt", opciones.prompt.trim());
-    datos.append("response_format", "json");
-    const respuesta = await fetch(TRANSCRIPTIONS_API_URL, {
-        method: "POST",
-        headers: {Authorization},
-        body: datos,
-        signal: AbortSignal.timeout(60_000)
+async function procesarImagen(imagenUrl, prompt = 'Describí esta imagen.', opciones = {}) {
+    validarTexto(prompt);
+    if (typeof imagenUrl !== 'string' || !/^(https?:\/\/|data:image\/)/.test(imagenUrl)) throw new Error('Indicá una URL HTTP(S) o una imagen en base64.');
+    const configuracion = crearConfiguracion(opciones);
+    const input = [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: imagenUrl }] }];
+    return consultarOpenAI(RESPONSES_API_URL, crearCuerpo(input, configuracion), configuracion, 'imagen', 0, {
+        imagenUrl, contexto: [configuracion.instrucciones, prompt].filter(Boolean).join('\n'),
     });
-    const cuerpo = await respuesta.json();
-    if(!respuesta.ok) throw new Error(cuerpo.error?.message || "No fue posible transcribir el audio.");
-    if(!cuerpo.text?.trim()) throw new Error("No se reconoció voz en el audio.");
-    return {resultado: cuerpo.text.trim(), tiempoRespuestaMs: Math.round(performance.now() - inicio), tokensGastados: obtenerUso(cuerpo), segundosAudio};
+}
+
+async function transcribirAudio(buffer, mimeType = 'audio/webm', opciones = {}) {
+    // El audio se guarda en el documento de Uso; 15 MB deja margen bajo el límite de MongoDB.
+    if (!Buffer.isBuffer(buffer) || !buffer.length || buffer.length > 15000000) throw new Error('El audio debe ser un Buffer de hasta 15 MB.');
+    const tipo = mimeType.split(';')[0].trim().toLowerCase();
+    const extensiones = { 'audio/webm': 'webm', 'audio/mp4': 'mp4', 'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/flac': 'flac', 'audio/x-m4a': 'm4a' };
+    if (!extensiones[tipo]) throw new Error('Formato de audio no compatible.');
+    if (opciones.json) throw new Error('La transcripción devuelve texto; aplicá JSON con procesarTexto.');
+    if (opciones.prompt !== undefined) validarTexto(opciones.prompt);
+    const contexto = opciones.prompt || 'Transcribí este audio.';
+    const { parseBuffer } = await import('music-metadata');
+    const { format } = await parseBuffer(buffer, { mimeType: tipo, size: buffer.length }, { duration: true });
+    const segundosAudio = Math.ceil(format.duration);
+    if (!Number.isFinite(segundosAudio) || segundosAudio <= 0) throw new Error('No se pudo determinar la duración del audio.');
+    const modelo = opciones.modeloAudio || opciones.modelo || process.env.OPENAI_TRANSCRIPTION_MODEL || process.env.OPENAI_AUDIO_MODEL || 'gpt-4o-mini-transcribe';
+    const configuracion = crearConfiguracion({ ...opciones, modelo });
+    const cuerpo = new FormData();
+    cuerpo.append('file', new Blob([buffer], { type: tipo }), `audio.${extensiones[tipo]}`);
+    cuerpo.append('model', modelo);
+    cuerpo.append('language', 'es');
+    cuerpo.append('response_format', 'json');
+    cuerpo.append('prompt', contexto);
+    return consultarOpenAI(TRANSCRIPTIONS_API_URL, cuerpo, configuracion, 'audio', segundosAudio, {
+        audio: buffer, audioMimeType: tipo, contexto,
+    });
+}
+
+async function procesarAudio(audioBase64, formato = 'webm', prompt = 'Transcribí este audio.', opciones = {}) {
+    if (typeof audioBase64 !== 'string' || !audioBase64.length || audioBase64.length > 33333336 || audioBase64.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(audioBase64)) throw new Error('Audio en base64 inválido.');
+    const tipos = { webm: 'audio/webm', mp4: 'audio/mp4', m4a: 'audio/x-m4a', mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac' };
+    if (!tipos[formato]) throw new Error('Formato de audio no compatible.');
+    return transcribirAudio(Buffer.from(audioBase64, 'base64'), tipos[formato], { ...opciones, prompt });
 }
 
 async function procesarBusquedaWeb(consulta, opciones = {}) {
+    validarTexto(consulta);
     const configuracion = crearConfiguracion(opciones);
-    return consultarOpenAI({
-        model: configuracion.modelo,
-        max_output_tokens: configuracion.maxTokensSalida,
-        tools: [{type: "web_search"}],
-        tool_choice: "required",
-        // Un pedido no puede disparar búsquedas adicionales que excedan el cupo reservado.
-        max_tool_calls: 1,
-        ...(configuracion.instrucciones && {instructions: configuracion.instrucciones}),
-        input: consulta
-    }, {consultasTexto: 1, webSearch: 1});
+    const cuerpo = crearCuerpo(consulta, configuracion);
+    cuerpo.tools = [{ type: 'web_search' }];
+    cuerpo.tool_choice = 'required';
+    cuerpo.max_tool_calls = 1;
+    return consultarOpenAI(RESPONSES_API_URL, cuerpo, configuracion, 'web', 0, {
+        busqueda: consulta, contexto: configuracion.instrucciones,
+    });
 }
 
-module.exports = {
-    procesarTexto,
-    procesarImagen,
-    procesarAudio,
-    transcribirAudio,
-    procesarBusquedaWeb
-};
+module.exports = { procesarTexto, procesarImagen, procesarAudio, transcribirAudio, procesarBusquedaWeb, procesarDecision };

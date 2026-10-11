@@ -7,10 +7,10 @@ const mensajeSchema = new mongoose.Schema({
     deClienteParaSistema: Boolean, //ordena en un boolean el sentido de la coversacion
     deSistemaParaCliente: Boolean, //ordena en un boolean el sentido de la coversacion
 
-    emisor: String,
+    emisor: String, //numero de telefono
     receptor: String, //numero de telefono
 
-    contenido: String, //numero de telefono
+    contenido: String,
 
     usoLLM: Boolean,
     accionEjecutada: String, //que accion llamo el LLM
@@ -36,6 +36,6 @@ const mensajeSchema = new mongoose.Schema({
     }
 },{ timestamps: true });
 
-//agrego indice por telefonoCliente y por updatedAt
+// Permite paginar los mensajes de una conversación por fecha.
 mensajeSchema.index({ conversacionId: 1, createdAt: -1 }); 
 module.exports = mongoose.model('Mensaje', mensajeSchema);

@@ -1,0 +1,9 @@
+{
+  "nombre": "intencion_cliente",
+  "instrucciones": "Clasificá la intención principal del cliente. Elegí otro cuando ninguna categoría corresponda.",
+  "opciones": [
+    { "value": "comprar", "description": "Consulta por precios, financiación o compra de una moto." },
+    { "value": "servicio", "description": "Necesita mantenimiento, reparación o repuestos." },
+    { "value": "otro", "description": "Otras consultas o mensajes sin intención clara." }
+  ]
+}

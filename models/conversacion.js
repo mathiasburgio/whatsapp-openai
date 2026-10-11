@@ -3,26 +3,29 @@ const oid = mongoose.Schema.Types.ObjectId;
 const mixed = mongoose.Schema.Types.Mixed;
 
 const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, //ordena en un boolean el sentido de la coversacion
-    deClienteParaSistema: Boolean, //ordena en un boolean el sentido de la coversacion
-    deSistemaParaCliente: Boolean, //ordena en un boolean el sentido de la coversacion
+    nombre: String, //nombre del cliente
+    telefono: String, //telefono del cliente
+    resumen: String, //resumen de la conversacion q va generando el bot
+    botActivo: Boolean, //si debe auto-contestar el LLM
+    ultimoMensaje: mixed, //copia del schema de "mensaje"
 
-    emisor: String,
-    receptor: String, //numero de telefono
-    intencion: [{
-        vehiculoId: oid,
+
+    intereses: [{
+        vehiculoId: oid, //referencia al vehículo de interés
+        vehiculo: mixed, //copia local de los datos del vehiculo (que vendran de una API de otro sistema)
+
+        preguntoPrecio: Boolean, //si el cliente preguntó por el precio
+        preguntoFinanciamiento: Boolean, //si el cliente preguntó por la financiación
+        preguntoEntrega: Boolean, //si el cliente preguntó por la entrega del vehículo
+        preguntoGarantia: Boolean, //si el cliente preguntó por la garantía
+
         lead: String, //frio, tibio, caliente, derivación
     }],
     
-    ultimoMensaje: Date,
-    estadoUltimoMensaje: String, //estado del ultimo mensaje (ej "leido", "entregado", "emitido")
-    
-    resumen: String,
-    
-    botActivo: Boolean,
     notificacion: [
         {
             lead: String, //frio, tibio, caliente, derivación
-            resumen: String, //se marca por q hay una notificacion
+            resumen: String, //se genera un resumen de la notificación
             creada: Date,
             aceptada: Boolean
         }
@@ -36,8 +39,8 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
 
 },{ timestamps: true });
 
-//agrego indice por telefonoCliente y por updatedAt
-conversacionSchema.index({ conversacionId: 1, createdAt: -1 }); 
+// Permite buscar las conversaciones de un teléfono por actualización.
+conversacionSchema.index({ telefono: 1, updatedAt: -1 });
 module.exports = mongoose.model('Conversacion', conversacionSchema);
 
 /*
