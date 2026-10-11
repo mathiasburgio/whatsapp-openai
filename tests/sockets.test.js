@@ -95,7 +95,9 @@ test('sockets comparte la sesión, valida conexiones y envíos, y filtra el broa
     assert.equal(enviados.length, 1);
 });
 
-test('el orquestador guarda el mensaje y notifica después de persistir la conversación', async () => {
+test('el orquestador guarda el mensaje del vendedor y notifica después de persistir la conversación', {
+    skip: 'El envío del vendedor está deshabilitado por decisión del usuario.',
+}, async () => {
     const id = new mongoose.Types.ObjectId();
     const conversacion = new Conversacion({
         _id: id, telefono: '5491112345678',

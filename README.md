@@ -49,6 +49,18 @@ Publicá tus commits antes de cambiar de máquina y actualizá la rama con `git 
 
 La integración de sesiones usa las opciones documentadas por [connect-mongo](https://github.com/jdesboeufs/connect-mongo) y [express-session](https://github.com/expressjs/session).
 
+## Recepción de WhatsApp
+
+El webhook público es `https://chat.rpsbikes.com.ar/whatsapp/webhook`. El GET permite verificarlo en Meta con el mismo `WEBHOOK_VERIFY_TOKEN` del servidor. El POST requiere `WHATSAPP_APP_SECRET` y valida la firma `x-hub-signature-256` sobre el cuerpo original; rechaza firmas inválidas con 401 y devuelve 503 si falta el secreto. No requiere una sesión del panel.
+
+Cada mensaje entrante se muestra en consola con teléfono, nombre, tipo, texto o caption e ID. Se recorren todos los mensajes de cada notificación y se omiten los eventos de estado de entrega/lectura. El webhook llama a `recibirMensajeWhatsapp(telefono, mensaje, imagen, audio, datos)`; `imagen` y `audio` son los objetos de archivo que entrega Meta, y `datos` contiene el nombre, número receptor, ID del número, ID del mensaje, fecha y contenido original.
+
+El orquestador crea o reutiliza la conversación por teléfono, guarda el mensaje en `mensajes`, actualiza `ultimoMensaje` y notifica al panel por sockets. Para imágenes o audios obtiene la URL del archivo desde Meta y lo descarga con `WHATSAPP_ACCESS_TOKEN`; luego llama a `procesarImagen` o `transcribirAudio` de OpenAI. Conserva el caption, agrega la descripción o transcripción al contenido, guarda `transcripcionImagen`/`transcripcionAudio` y acumula los tokens en el mensaje y la conversación. El uso de OpenAI queda asociado a esa conversación. Por ahora imprime `{ mensaje, respuestaOpenAi }` en consola; no envía una respuesta automática al cliente. El envío del vendedor permanece deshabilitado.
+
+El campo `whatsappId` tiene un índice único para evitar duplicados por reintentos de Meta. Los mensajes se procesan en orden por teléfono dentro del proceso. Se guarda `estadoProcesamiento` (`pendiente`, `completado` o `fallido`) y `errorProcesamiento` si falla el procesamiento; un mensaje fallido puede reintentarse sin crear otra copia. Los eventos antiguos no reemplazan un último mensaje más reciente. Las imágenes tienen un límite de 5 MB y los audios de 15 MB, por el almacenamiento de uso de OpenAI en MongoDB. Las notas de voz OGG son compatibles; AAC y AMR requieren conversión previa a un formato que admita el servicio de transcripción.
+
+La confirmación HTTP 200 se envía antes de procesar los mensajes para responder rápido a Meta. El procesamiento continúa en el mismo servidor: no hay una cola persistente, por lo que un cierre del proceso después de confirmar y antes de guardar puede perder ese evento. Los fallos posteriores se guardan cuando es posible y se muestran en consola; no provocan una respuesta automática ni un reintento de Meta por el estado HTTP.
+
 ## Decisions de OpenAI
 
 `services/openai.js` exporta `procesarDecision(prompt, opciones, configuracion)`. Evalúa el prompt y elige una de las opciones usando `POST /v1/decisions`, con una pregunta de tipo `choice`. La configuración y la respuesta siguen la [referencia oficial de Decisions](https://developers.openai.com/api/reference/typescript/resources/decisions/methods/create).

@@ -4,6 +4,9 @@ const mixed = mongoose.Schema.Types.Mixed;
 
 const mensajeSchema = new mongoose.Schema({
     conversacionId: oid,
+    whatsappId: String, //ID entrante de Meta; evita duplicados por reintentos del webhook
+    estadoProcesamiento: String, //pendiente, completado o fallido
+    errorProcesamiento: String,
     deClienteParaSistema: Boolean, //ordena en un boolean el sentido de la coversacion
     deSistemaParaCliente: Boolean, //ordena en un boolean el sentido de la coversacion
 
@@ -37,5 +40,6 @@ const mensajeSchema = new mongoose.Schema({
 },{ timestamps: true });
 
 // Permite paginar los mensajes de una conversación por fecha.
-mensajeSchema.index({ conversacionId: 1, createdAt: -1 }); 
+mensajeSchema.index({ conversacionId: 1, createdAt: -1 });
+mensajeSchema.index({ whatsappId: 1 }, { unique: true, partialFilterExpression: { whatsappId: { $type: 'string' } } });
 module.exports = mongoose.model('Mensaje', mensajeSchema);
