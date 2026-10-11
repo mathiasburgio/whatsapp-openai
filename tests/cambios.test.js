@@ -59,7 +59,7 @@ test('el login limita intentos y las rutas usan la nueva conversación', async (
         './services/whatsapp': {
             recibirMensajeWebhook() {}, configurarWebhook() {},
         },
-        './services/orquestador': {}, './services/mongo': {},
+        './services/orquestador': {}, './services/mongo': {}, './services/archivos': {}, './services/metricas': {},
         './services/sockets': { inicializar() {} },
         './services/usuarios': {
             iniciarSesion: (req, res) => { loginCalls++; res.json({ sesionActiva: true }); }, cerrarSesion() {},

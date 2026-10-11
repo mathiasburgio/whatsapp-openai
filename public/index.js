@@ -4,6 +4,8 @@ let mensajes = [];
 let paginaMensajes = 0;
 let cargandoMensajes = false;
 let hayMasMensajes = false;
+let guardandoBot = null;
+let solicitudMetricas = 0;
 const socket = io({ autoConnect: false });
 
 socket.on('connect', obtenerConversaciones);
@@ -13,6 +15,8 @@ socket.on('disconnect', motivo => {
         conversaciones = [];
         conversacionActual = null;
         mensajes = [];
+        limpiarMetricas();
+        actualizarControlBot();
         $('body').attr('data-estado', 'login');
     }
 });
@@ -28,8 +32,10 @@ function recibirCambios({ conversacion, mensaje }) {
     if (conversacion) {
         const actual = conversaciones.find(c => c._id === conversacion._id);
         if (actual) Object.assign(actual, conversacion);
+        if (conversacionActual?._id === conversacion._id) Object.assign(conversacionActual, conversacion);
         conversaciones = [actual || conversacion, ...conversaciones.filter(c => c._id !== conversacion._id)];
         listarConversaciones();
+        actualizarControlBot();
     }
     if (mensaje && conversacionActual?._id === mensaje.conversacionId) {
         const posicion = mensajes.findIndex(m => m._id === mensaje._id);
@@ -78,6 +84,7 @@ async function iniciarSesion(){
 }
 
 async function cerrarSesion(){
+    $('#btn-cerrar-sesion').prop('disabled', true);
     try{
         await $.post('/cerrar-sesion');
         socket.disconnect();
@@ -90,9 +97,13 @@ async function cerrarSesion(){
         $('#telefono-conversacion').text('');
         $('#texto-mensaje, #contrasena, #buscar-conversacion').val('');
         $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
+        actualizarControlBot();
+        limpiarMetricas();
         $('body').attr('data-estado', 'login');
     }catch(error){
         Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudo cerrar sesión.' });
+    }finally{
+        $('#btn-cerrar-sesion').prop('disabled', false);
     }
 }
 
@@ -112,6 +123,66 @@ async function obtenerConversaciones(){
 function escaparHtml(texto) {
     const caracteres = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     return String(texto ?? '').replace(/[&<>"']/g, caracter => caracteres[caracter]);
+}
+
+function actualizarControlBot() {
+    $('#bot-activo').prop('checked', !!conversacionActual?.botActivo)
+        .prop('disabled', !conversacionActual || guardandoBot === conversacionActual._id);
+    $('#estado-bot').text(conversacionActual?.botActivo ? 'Bot activo' : 'Bot inactivo');
+}
+
+async function cambiarEstadoBot() {
+    const conversacion = conversacionActual;
+    if (!conversacion || guardandoBot) { actualizarControlBot(); return; }
+    const botActivo = $('#bot-activo').prop('checked');
+    guardandoBot = conversacion._id;
+    $('#bot-activo').prop('disabled', true);
+    try {
+        const actualizada = await $.post({ url: '/conversaciones/' + encodeURIComponent(conversacion._id) + '/bot',
+            contentType: 'application/json', data: JSON.stringify({ botActivo }) });
+        // Una respuesta tardía no debe cambiar la selección ni restaurar datos tras cerrar sesión.
+        if (conversaciones.some(actual => actual._id === conversacion._id)) recibirCambios({ conversacion: actualizada });
+    } catch (error) {
+        if (error.status === 401) { socket.disconnect(); $('body').attr('data-estado', 'login'); limpiarMetricas(); }
+        Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudo cambiar el estado del bot.' });
+    } finally {
+        guardandoBot = null;
+        actualizarControlBot();
+    }
+}
+
+function limpiarMetricas() {
+    solicitudMetricas++;
+    if (typeof bootstrap !== 'undefined') bootstrap.Modal.getInstance(document.getElementById('modal-metricas'))?.hide();
+    $('#metricas-contenido').prop('hidden', true);
+    $('#periodo-metricas, #metricas-detalle-tokens').text('');
+    $('#metrica-web, #metrica-textos, #metrica-segundos, #metrica-tokens, #metrica-imagenes, #metrica-respuestas').text('—');
+}
+
+async function mostrarMetricas() {
+    const solicitud = ++solicitudMetricas;
+    const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-metricas'));
+    $('#metricas-contenido').prop('hidden', true);
+    $('#periodo-metricas').text('');
+    $('#metricas-estado').prop('hidden', false).text('Cargando métricas…');
+    modal.show();
+    try {
+        const metricas = await $.get('/metricas/mes');
+        if (solicitud !== solicitudMetricas) return;
+        const formato = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2 });
+        $('#periodo-metricas').text(new Date(metricas.periodo.inicio).toLocaleDateString('es-AR', { month: 'long', year: 'numeric', timeZone: 'UTC' }) + ' · UTC');
+        for (const [id, campo] of Object.entries({ web: 'llamadasWebSearch', textos: 'llamadasProcesarTexto', segundos: 'segundosProcesados',
+            tokens: 'tokensProcesados', imagenes: 'imagenesProcesadas', respuestas: 'respuestasAutomaticas' })) {
+            $('#metrica-' + id).text(formato.format(metricas[campo] ?? 0));
+        }
+        $('#metricas-detalle-tokens').text('Tokens de entrada: ' + formato.format(metricas.tokensEntrada) + ' · Tokens de salida: ' + formato.format(metricas.tokensSalida));
+        $('#metricas-estado').prop('hidden', true);
+        $('#metricas-contenido').prop('hidden', false);
+    } catch (error) {
+        if (solicitud !== solicitudMetricas) return;
+        $('#metricas-estado').text(error.responseJSON?.error || 'No se pudieron cargar las métricas. Cerrá el modal y volvé a intentar.');
+        if (error.status === 401) { socket.disconnect(); $('body').attr('data-estado', 'login'); limpiarMetricas(); }
+    }
 }
 
 function listarConversaciones(){
@@ -172,6 +243,7 @@ async function obtenerMensajes(conversacionId, pagina = 0){
         $('#telefono-conversacion').text(telefono);
         $('#mensajes').attr('aria-label', 'Mensajes de ' + (conversacion.nombre || telefono));
         listarConversaciones();
+        actualizarControlBot();
     }
     cargandoMensajes = true;
     $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
@@ -197,14 +269,60 @@ async function obtenerMensajes(conversacionId, pagina = 0){
     }
 }
 
+function textoOriginal(mensaje) {
+    if (mensaje.contenidoOriginal !== undefined && mensaje.contenidoOriginal !== null) return mensaje.contenidoOriginal;
+    if (mensaje.esImagen && mensaje.crudo?.image) return mensaje.crudo.image.caption || '';
+    if (mensaje.esAudio && mensaje.crudo?.audio) return '';
+    let texto = mensaje.contenido || '';
+    // Compatibilidad con mensajes guardados antes de separar el texto y las inferencias.
+    for (const inferencia of [mensaje.transcripcionImagen, mensaje.transcripcionAudio].filter(Boolean).reverse()) {
+        if (texto === inferencia) texto = '';
+        else if (texto.endsWith('\n' + inferencia)) texto = texto.slice(0, -inferencia.length - 1);
+    }
+    return ['[Imagen]', '[Audio]'].includes(texto) && (mensaje.esImagen || mensaje.esAudio) ? '' : texto;
+}
+
 function listarMensajes(){
-    $('#mensajes').empty();
-    mensajes.forEach(mensaje => {
+    const contenedor = $('#mensajes')[0];
+    const filas = new Map(Array.from(contenedor.children).map(fila => [fila.dataset.mensajeId, fila]));
+    const vigentes = new Set(mensajes.map(mensaje => String(mensaje._id)));
+    for (const [id, fila] of filas) if (!vigentes.has(id)) fila.remove();
+    mensajes.forEach((mensaje, posicion) => {
+        const id = String(mensaje._id);
         const enviado = mensaje.deSistemaParaCliente;
-        const fila = $('<article>', { class: 'mensaje mensaje-' + (enviado ? 'enviado' : 'recibido'), 'aria-label': enviado ? 'Mensaje enviado' : 'Mensaje recibido' });
-        fila.append($('<p>').text(mensaje.contenido || mensaje.transcripcionAudio || mensaje.transcripcionImagen || ''));
+        let fila = filas.has(id) ? $(filas.get(id)) : $('<article>', { 'data-mensaje-id': id });
+        fila.attr({ class: 'mensaje mensaje-' + (enviado ? 'enviado' : 'recibido'), 'aria-label': enviado ? 'Mensaje enviado' : 'Mensaje recibido' });
+        if (!filas.has(id)) {
+            fila.append($('<div>', { class: 'mensaje-media' }), $('<div>', { class: 'mensaje-textos' }), $('<div>', { class: 'mensaje-meta' }));
+        }
+        const media = fila.find('.mensaje-media');
+        // Conserva los elementos multimedia al actualizar por socket, incluido el audio que está reproduciéndose.
+        for (const [tipo, presente] of [['imagen', mensaje.esImagen], ['audio', mensaje.esAudio]]) {
+            if (!presente || media.find('[data-media-tipo="' + tipo + '"]').length) continue;
+            const url = '/mensajes/' + encodeURIComponent(id) + '/media/' + tipo;
+            const bloque = $('<div>', { 'data-media-tipo': tipo });
+            const elemento = tipo === 'audio'
+                ? $('<audio>', { controls: true, preload: 'none', src: url, 'aria-label': 'Reproducir audio del mensaje' })
+                : $('<img>', { src: url, alt: 'Imagen enviada en la conversación', loading: 'lazy', class: 'mensaje-imagen' });
+            elemento.on('error', () => {
+                if (!bloque.find('.media-error').length) bloque.append($('<p>', { class: 'media-error' }).text('No se pudo cargar ' + (tipo === 'audio' ? 'el audio.' : 'la imagen.')));
+            });
+            bloque.append(elemento);
+            media.append(bloque);
+        }
+        const textos = fila.find('.mensaje-textos').empty();
+        const original = textoOriginal(mensaje);
+        if (original) textos.append($('<p>', { class: 'mensaje-original' }).text(original));
+        if (mensaje.transcripcionImagen) {
+            textos.append($('<aside>', { class: 'mensaje-inferencia', 'aria-label': 'Inferencia de IA sobre la imagen' })
+                .append($('<span>', { class: 'inferencia-etiqueta' }).text('Inferencia de IA'), $('<p>').text(mensaje.transcripcionImagen)));
+        }
+        if (mensaje.transcripcionAudio) {
+            textos.append($('<div>', { class: 'mensaje-transcripcion' })
+                .append($('<span>', { class: 'inferencia-etiqueta' }).text('Transcripción del audio'), $('<p>').text(mensaje.transcripcionAudio)));
+        }
         const fecha = new Date(mensaje.fechaEmitida || mensaje.createdAt);
-        const meta = $('<div>', { class: 'mensaje-meta' });
+        const meta = fila.find('.mensaje-meta').empty();
         if (!Number.isNaN(fecha.getTime())) {
             meta.append($('<time>', { datetime: fecha.toISOString(), title: fecha.toLocaleString('es-AR') })
                 .text(fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false })));
@@ -213,7 +331,7 @@ function listarMensajes(){
             class: 'fa-solid fa-check' + (mensaje.fechaLeida || mensaje.fechaEntrega ? '-double' : '') + (mensaje.fechaLeida ? ' estado-leido' : ''),
             'aria-label': mensaje.fechaLeida ? 'Leído' : mensaje.fechaEntrega ? 'Entregado' : 'Enviado'
         }));
-        $('#mensajes').append(fila.append(meta));
+        if (contenedor.children[posicion] !== fila[0]) contenedor.insertBefore(fila[0], contenedor.children[posicion] || null);
     });
     $('#mensajes').scrollTop($('#mensajes')[0].scrollHeight);
 }
@@ -246,6 +364,9 @@ async function enviarMensaje(){
 $('#form-login').on('submit', ev => { ev.preventDefault(); iniciarSesion(); });
 $('#buscar-conversacion').on('input', listarConversaciones);
 $('#btn-enviar-mensaje').on('click', enviarMensaje);
+$('#btn-cerrar-sesion').on('click', cerrarSesion);
+$('#btn-metricas').on('click', mostrarMetricas);
+$('#bot-activo').on('change', cambiarEstadoBot);
 $('#texto-mensaje').on('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.originalEvent.isComposing) {
         ev.preventDefault();

@@ -140,6 +140,7 @@ test('el panel no duplica el mensaje al recibir el broadcast y la confirmación'
     vm.runInContext(`
         listarConversaciones = () => {};
         listarMensajes = () => {};
+        actualizarControlBot = () => {};
         conversaciones = [{ _id: 'c1', nombre: 'Cliente' }];
         conversacionActual = conversaciones[0];
     `, context);

@@ -61,6 +61,16 @@ El campo `whatsappId` tiene un índice único para evitar duplicados por reinten
 
 La confirmación HTTP 200 se envía antes de procesar los mensajes para responder rápido a Meta. El procesamiento continúa en el mismo servidor: no hay una cola persistente, por lo que un cierre del proceso después de confirmar y antes de guardar puede perder ese evento. Los fallos posteriores se guardan cuando es posible y se muestran en consola; no provocan una respuesta automática ni un reintento de Meta por el estado HTTP.
 
+El panel muestra las imágenes y permite reproducir los audios con los controles del navegador. El caption del cliente se muestra separado de la descripción de la imagen, que aparece en un recuadro violeta con la etiqueta **Inferencia de IA**. Las actualizaciones por socket conservan el reproductor para no interrumpir la reproducción.
+
+Los archivos se guardan antes de consultar a OpenAI en `uploads/imagenes` y `uploads/audio`, y se entregan por `GET /mensajes/:mensajeId/media/:tipo` (`imagen` o `audio`), que requiere una sesión habilitada. No se exponen el token ni la URL temporal de Meta. Los mensajes anteriores intentan recuperar y conservar el archivo usando el ID en `crudo`; si Meta ya no lo tiene disponible, el panel informa que no pudo cargarlo. **Conservá la carpeta `uploads` entre despliegues y copiala al migrar de servidor junto con MongoDB**; está excluida de Git. En varias instancias, esta carpeta debe estar en un volumen compartido. La reproducción depende de los formatos que admita el navegador.
+
+## Controles y métricas del panel
+
+La barra superior permite cerrar sesión y abrir las métricas del mes actual para todas las conversaciones. El interruptor de cada conversación guarda `botActivo` por medio de `POST /conversaciones/:conversacionId/bot` y actualiza los paneles abiertos por socket. Las conversaciones nuevas empiezan con el bot inactivo. Por decisión de configuración, este control **solo guarda el estado**: la generación y el envío de respuestas automáticas todavía no están conectados. El envío manual del vendedor continúa deshabilitado.
+
+`GET /metricas/mes` requiere una sesión habilitada, al igual que el cambio de estado. Usa el mes UTC, coincidente con los límites de OpenAI. Cuenta las llamadas registradas de búsquedas web y de `procesarTexto` (sin incluir búsquedas ni Decisions en esta última cifra), excluyendo usos rechazados sin consumo. Los segundos de audio y las imágenes cuentan usos completados; los tokens suman el consumo informado, incluidos los errores que consumieron tokens. Las respuestas automáticas cuentan únicamente mensajes salientes con `respuestaAutomatica: true` y un ID aceptado por WhatsApp; no se cuentan mensajes manuales ni entrantes. Sin el flujo automático integrado, ese contador permanece en cero.
+
 ## Decisions de OpenAI
 
 `services/openai.js` exporta `procesarDecision(prompt, opciones, configuracion)`. Evalúa el prompt y elige una de las opciones usando `POST /v1/decisions`, con una pregunta de tipo `choice`. La configuración y la respuesta siguen la [referencia oficial de Decisions](https://developers.openai.com/api/reference/typescript/resources/decisions/methods/create).

@@ -28,6 +28,13 @@ function preparar(t, servicios = {}) {
             cambios.push({ conversacion: conversacion.toObject(), mensaje: mensaje.toObject() });
         } },
         './whatsapp': servicios.whatsapp || { descargarMedia: async () => assert.fail('El texto no descarga archivos') },
+        './archivos': { obtenerMedia: async (mensaje, tipo, descriptor, phoneNumberId) => {
+            const archivo = await servicios.whatsapp.descargarMedia(descriptor.id, { phoneNumberId, maxBytes: tipo === 'imagen' ? 5000000 : 15000000 });
+            mensaje[`${tipo}Archivo`] = 'archivo.' + (tipo === 'imagen' ? 'jpg' : 'ogg');
+            mensaje[`${tipo}MimeType`] = archivo.mimeType;
+            await mensaje.save();
+            return archivo;
+        } },
         './openai': servicios.openai || { procesarImagen: async () => assert.fail('El texto no consume OpenAI'),
             transcribirAudio: async () => assert.fail('El texto no consume OpenAI') },
     };
@@ -88,6 +95,8 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
     assert.equal(llamadas[0][2].conversacionId.toString(), imagen.conversacion._id.toString());
     assert.equal(imagen.mensaje.transcripcionImagen, 'Una Honda Navi');
     assert.equal(imagen.mensaje.contenido, 'Identificá esta moto\nUna Honda Navi');
+    assert.equal(imagen.mensaje.contenidoOriginal, 'Identificá esta moto');
+    assert.equal(imagen.mensaje.imagenArchivo, 'archivo.jpg');
     assert.equal(imagen.mensaje.esImagen, true);
     assert.equal(imagen.mensaje.usoLLM, true);
     assert.equal(imagen.mensaje.tokens.total, 25);
@@ -141,6 +150,7 @@ test('un fallo de OpenAI conserva el mensaje, informa al panel y permite reinten
     assert.equal(mensajes.length, 1);
     assert.equal(mensajes[0].estadoProcesamiento, 'fallido');
     assert.equal(mensajes[0].errorProcesamiento, 'Cupo agotado');
+    assert.equal(mensajes[0].audioArchivo, 'archivo.ogg');
     assert.equal(mensajes[0].contenido, '[Audio]');
     assert.equal(cambios.at(-1).mensaje.estadoProcesamiento, 'fallido');
     await recibir();

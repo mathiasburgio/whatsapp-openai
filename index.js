@@ -15,6 +15,8 @@ const usuarioService = require('./services/usuarios');
 const cUsuarios = require('./models/usuarios');
 const cConversaciones = require('./models/conversacion');
 const cMensajes = require('./models/mensaje');
+const archivosService = require('./services/archivos');
+const metricasService = require('./services/metricas');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
@@ -121,6 +123,42 @@ app.get("/mensajes", async (req, res)=>{
         console.error(error);
         res.status(500).json({ error: 'Error al obtener los mensajes' });
     }
+});
+
+app.post('/conversaciones/:conversacionId/bot', async (req, res) => {
+    try {
+        if (!await tieneSesion(req, res)) return;
+        const { conversacionId } = req.params;
+        if (!mongoose.isObjectIdOrHexString(conversacionId) || typeof req.body?.botActivo !== 'boolean') {
+            return res.status(400).json({ error: 'Indicá una conversación y un estado del bot válidos.' });
+        }
+        const conversacion = await cConversaciones.findOneAndUpdate({ _id: conversacionId },
+            { $set: { botActivo: req.body.botActivo } }, { returnDocument: 'after', runValidators: true });
+        if (!conversacion) return res.status(404).json({ error: 'Conversación no encontrada.' });
+        await socketsService.notificarCambios(conversacion);
+        res.json(conversacion);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'No se pudo cambiar el estado del bot.' });
+    }
+});
+
+app.get('/metricas/mes', async (req, res) => {
+    try {
+        if (!await tieneSesion(req, res)) return;
+        res.set('Cache-Control', 'no-store');
+        res.json(await metricasService.obtenerMetricasMensuales());
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'No se pudieron obtener las métricas del mes.' });
+    }
+});
+
+app.get('/mensajes/:mensajeId/media/:tipo', async (req, res, next) => {
+    try {
+        if (!await tieneSesion(req, res)) return;
+        await archivosService.servirMedia(req, res, next);
+    } catch (error) { next(error); }
 });
 
 // Registramos las rutas después del middleware de sesión.

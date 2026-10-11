@@ -2,6 +2,7 @@ const Conversacion = require('../models/conversacion');
 const Mensaje = require('../models/mensaje');
 const sockets = require('./sockets');
 const openai = require('./openai');
+const archivos = require('./archivos');
 const pendientesPorTelefono = new Map();
 
 function recibirMensajeWhatsapp(telefono, mensaje = '', imagen, audio, datos = {}) {
@@ -29,7 +30,9 @@ async function actualizarConversacion(conversacion, mensaje, tokens) {
         }
     }
     await conversacion.save();
-    await sockets.notificarCambios(conversacion, mensaje);
+    // El estado del bot puede cambiar desde el panel mientras se procesa el archivo.
+    const actualizada = await Conversacion.findById(conversacion._id);
+    await sockets.notificarCambios(actualizada || conversacion, mensaje);
 }
 
 async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos) {
@@ -45,6 +48,7 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
         try {
             mensaje = await Mensaje.create({ conversacionId: conversacion._id, whatsappId: datos.whatsappId,
                 emisor: telefono, receptor: datos.receptor,
+                contenidoOriginal: contenido, mediaPhoneNumberId: datos.phoneNumberId,
                 contenido: contenido || (imagen ? '[Imagen]' : audio ? '[Audio]' : ''), deClienteParaSistema: true, deSistemaParaCliente: false,
                 esImagen: !!imagen, esAudio: !!audio, usoLLM: false, estadoProcesamiento: 'pendiente',
                 fechaEmitida, crudo: datos.crudo });
@@ -58,10 +62,9 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
     const respuestas = [];
     try {
         if (imagen || audio) {
-            const whatsapp = require('./whatsapp');
             const opciones = { conversacionId: conversacion._id };
             if (imagen && !mensaje.transcripcionImagen) {
-                const archivo = await whatsapp.descargarMedia(imagen.id, { phoneNumberId: datos.phoneNumberId, maxBytes: 5000000 });
+                const archivo = await archivos.obtenerMedia(mensaje, 'imagen', imagen, datos.phoneNumberId);
                 if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(archivo.mimeType)) throw new Error('La imagen de WhatsApp tiene un formato no compatible.');
                 const imagenUrl = `data:${archivo.mimeType};base64,${archivo.buffer.toString('base64')}`;
                 mensaje.usoLLM = true;
@@ -70,7 +73,7 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
                 respuestas.push(respuesta);
             }
             if (audio && !mensaje.transcripcionAudio) {
-                const archivo = await whatsapp.descargarMedia(audio.id, { phoneNumberId: datos.phoneNumberId, maxBytes: 15000000 });
+                const archivo = await archivos.obtenerMedia(mensaje, 'audio', audio, datos.phoneNumberId);
                 mensaje.usoLLM = true;
                 const respuesta = await openai.transcribirAudio(archivo.buffer, archivo.mimeType, opciones);
                 mensaje.transcripcionAudio = respuesta.resultado;

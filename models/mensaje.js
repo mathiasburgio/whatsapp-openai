@@ -14,16 +14,23 @@ const mensajeSchema = new mongoose.Schema({
     receptor: String, //numero de telefono
 
     contenido: String,
+    contenidoOriginal: String, //texto del cliente, separado de las transcripciones de IA
+    mediaPhoneNumberId: String,
 
     usoLLM: Boolean,
+    respuestaAutomatica: Boolean, //respuesta del bot aceptada por WhatsApp
     accionEjecutada: String, //que accion llamo el LLM
     parametroEjecutado: String, //parametro que uso el LLM (ej "ando buscando una moto honda navi"-> "moto honda navi")
     parametroRecibido: String, //parametro que recibio el LLM (ej {_id: "12345", marca: "honda", modelo: "navi", estado: "nueva"})
     
     esAudio: Boolean,
+    audioArchivo: String,
+    audioMimeType: String,
     transcripcionAudio: String,
     
     esImagen: Boolean,
+    imagenArchivo: String,
+    imagenMimeType: String,
     transcripcionImagen: String,
 
     fechaEmitida: Date, // cuando se deriva el mensaje

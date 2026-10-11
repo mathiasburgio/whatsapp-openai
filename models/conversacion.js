@@ -6,7 +6,7 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
     nombre: String, //nombre del cliente
     telefono: String, //telefono del cliente
     resumen: String, //resumen de la conversacion q va generando el bot
-    botActivo: Boolean, //si debe auto-contestar el LLM
+    botActivo: { type: Boolean, default: false }, //si debe auto-contestar el LLM
     ultimoMensaje: mixed, //copia del schema de "mensaje"
 
 
