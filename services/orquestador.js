@@ -3,7 +3,13 @@ const Mensaje = require('../models/mensaje');
 const sockets = require('./sockets');
 const openai = require('./openai');
 const archivos = require('./archivos');
+const prompts = require('./prompts');
+const promociones = require('./promociones');
+const bot = require('./bot');
+const envios = require('./envios');
+const mongoose = require('mongoose');
 const pendientesPorTelefono = new Map();
+const enviosVendedor = new Map();
 
 function recibirMensajeWhatsapp(telefono, mensaje = '', imagen, audio, datos = {}) {
     if (typeof telefono !== 'string' || !/^\d{5,20}$/.test(telefono)) return Promise.reject(new Error('El teléfono de WhatsApp no es válido.'));
@@ -18,19 +24,13 @@ function recibirMensajeWhatsapp(telefono, mensaje = '', imagen, audio, datos = {
 }
 
 async function actualizarConversacion(conversacion, mensaje, tokens) {
-    const ultimo = conversacion.ultimoMensaje;
-    // Un evento antiguo no debe reemplazar un mensaje más reciente en la vista del panel.
-    if (!ultimo || !ultimo.fechaEmitida || new Date(ultimo.fechaEmitida) <= mensaje.fechaEmitida) {
-        conversacion.deClienteParaSistema = true;
-        conversacion.ultimoMensaje = mensaje.toObject();
-    }
-    if (tokens) {
-        for (const campo of ['entrada', 'salida', 'total']) {
-            conversacion.set(`tokens.${campo}`, (conversacion.tokens?.[campo] || 0) + (tokens[campo] || 0));
-        }
-    }
     await conversacion.save();
-    // El estado del bot puede cambiar desde el panel mientras se procesa el archivo.
+    if (tokens) await Conversacion.updateOne({ _id: conversacion._id }, { $inc: Object.fromEntries(
+        ['entrada', 'salida', 'total'].map(campo => ['tokens.' + campo, tokens[campo] || 0])) });
+    // Compara en la base: un archivo antiguo que termina de procesarse no pisa una respuesta del vendedor.
+    await Conversacion.findOneAndUpdate({ _id: conversacion._id, $or: [
+        { 'ultimoMensaje.fechaEmitida': { $exists: false } }, { 'ultimoMensaje.fechaEmitida': { $lte: mensaje.fechaEmitida } },
+    ] }, { $set: { deClienteParaSistema: !!mensaje.deClienteParaSistema, ultimoMensaje: mensaje.toObject() } });
     const actualizada = await Conversacion.findById(conversacion._id);
     await sockets.notificarCambios(actualizada || conversacion, mensaje);
 }
@@ -51,31 +51,37 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
                 contenidoOriginal: contenido, mediaPhoneNumberId: datos.phoneNumberId,
                 contenido: contenido || (imagen ? '[Imagen]' : audio ? '[Audio]' : ''), deClienteParaSistema: true, deSistemaParaCliente: false,
                 esImagen: !!imagen, esAudio: !!audio, usoLLM: false, estadoProcesamiento: 'pendiente',
+                estadoBot: conversacion.botActivo ? 'pendiente' : 'omitido',
+                revisionBot: conversacion.revisionBot || 0,
                 fechaEmitida, crudo: datos.crudo });
         } catch (error) {
             if (error.code === 11000 && datos.whatsappId) return { mensaje: await Mensaje.findOne({ whatsappId: datos.whatsappId }), duplicado: true };
             throw error;
         }
     }
+    try { await promociones.registrar(conversacion, mensaje); }
+    catch (error) { console.error('No se pudo registrar el origen de la conversación:', error.message); }
     await actualizarConversacion(conversacion, mensaje);
     let respuestaOpenAi = null;
     const respuestas = [];
     try {
         if (imagen || audio) {
+            const configuracion = await prompts.cargar();
             const opciones = { conversacionId: conversacion._id };
             if (imagen && !mensaje.transcripcionImagen) {
                 const archivo = await archivos.obtenerMedia(mensaje, 'imagen', imagen, datos.phoneNumberId);
                 if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(archivo.mimeType)) throw new Error('La imagen de WhatsApp tiene un formato no compatible.');
                 const imagenUrl = `data:${archivo.mimeType};base64,${archivo.buffer.toString('base64')}`;
                 mensaje.usoLLM = true;
-                const respuesta = await openai.procesarImagen(imagenUrl, contenido || 'Describí qué hay en esta imagen.', opciones);
+                const respuesta = await openai.procesarImagen(imagenUrl, contenido || 'Describí qué hay en esta imagen.',
+                    { ...opciones, instrucciones: configuracion.imagen });
                 mensaje.transcripcionImagen = respuesta.resultado;
                 respuestas.push(respuesta);
             }
             if (audio && !mensaje.transcripcionAudio) {
                 const archivo = await archivos.obtenerMedia(mensaje, 'audio', audio, datos.phoneNumberId);
                 mensaje.usoLLM = true;
-                const respuesta = await openai.transcribirAudio(archivo.buffer, archivo.mimeType, opciones);
+                const respuesta = await openai.transcribirAudio(archivo.buffer, archivo.mimeType, { ...opciones, prompt: configuracion.audio });
                 mensaje.transcripcionAudio = respuesta.resultado;
                 respuestas.push(respuesta);
             }
@@ -85,6 +91,11 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
     } catch (error) {
         mensaje.estadoProcesamiento = 'fallido';
         mensaje.errorProcesamiento = error.message;
+        // Si el archivo sigue siendo la consulta actual, requiere atención humana.
+        await Conversacion.findOneAndUpdate({ _id: conversacion._id, 'ultimoMensaje._id': mensaje._id }, {
+            $set: { botActivo: false, requiereAtencion: true, motivoDerivacion: 'No se pudo procesar el mensaje: ' + error.message.slice(0, 900) },
+            $inc: { revisionBot: 1 },
+        });
         throw error;
     } finally {
         respuestaOpenAi = [mensaje.transcripcionImagen, mensaje.transcripcionAudio].filter(Boolean).join('\n') || null;
@@ -98,30 +109,81 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
         await actualizarConversacion(conversacion, mensaje, tokens);
         console.log({ mensaje: mensaje.contenido, respuestaOpenAi });
     }
+    try { await bot.responder(mensaje); }
+    catch (error) { console.error('No se pudo guardar el estado del bot:', error.message); }
     return { conversacion, mensaje, respuestaOpenAi };
 }
-/* async function recibirMensajeVendedor(conversacionId, contenido) {
-    const conversacion = await Conversacion.findById(conversacionId);
+function recibirMensajeVendedor(conversacionId, contenido, datos = {}) {
+    if (!mongoose.isObjectIdOrHexString(conversacionId) || typeof contenido !== 'string' || !contenido.trim() || contenido.trim().length > 4096
+        || typeof datos.solicitudId !== 'string' || !/^[a-f0-9-]{36}$/i.test(datos.solicitudId)) return Promise.reject(new Error('Conversación, mensaje o identificador de envío inválidos.'));
+    const clave = datos.solicitudId;
+    const pendiente = enviosVendedor.get(clave);
+    if (pendiente) {
+        if (pendiente.conversacionId !== String(conversacionId) || pendiente.contenido !== contenido.trim()) return Promise.reject(new Error('El identificador de envío ya está en uso.'));
+        return pendiente.promesa;
+    }
+    const promesa = enviarMensajeVendedor(conversacionId, contenido.trim(), datos);
+    enviosVendedor.set(clave, { conversacionId: String(conversacionId), contenido: contenido.trim(), promesa });
+    const limpiar = () => enviosVendedor.delete(clave);
+    promesa.then(limpiar, limpiar);
+    return promesa;
+}
+async function enviarMensajeVendedor(conversacionId, contenido, datos) {
+    let mensaje = await Mensaje.findOne({ solicitudEnvioId: datos.solicitudId });
+    if (mensaje) {
+        if (String(mensaje.conversacionId) !== String(conversacionId) || mensaje.contenido !== contenido) throw new Error('El identificador de envío ya está en uso.');
+        return mensaje;
+    }
+    // Pausa de inmediato, sin esperar las llamadas a IA que puedan estar en curso.
+    const conversacion = await Conversacion.findOneAndUpdate({ _id: conversacionId }, {
+        $set: { botActivo: false },
+        $inc: { revisionBot: 1 },
+    }, { returnDocument: 'after' });
     if (!conversacion?.telefono) throw new Error('La conversación no tiene teléfono de contacto.');
-    const ultimoMensaje = conversacion.ultimoMensaje;
-    const emisor = ultimoMensaje?.deClienteParaSistema ? ultimoMensaje.receptor : ultimoMensaje?.emisor;
-    const whatsapp = require('./whatsapp');
-    const crudo = await whatsapp.enviarMensaje({ to: conversacion.telefono, text: contenido });
-    const mensaje = await Mensaje.create({
-        conversacionId, contenido, emisor, receptor: conversacion.telefono,
-        deClienteParaSistema: false, deSistemaParaCliente: true,
-        usoLLM: false, fechaEmitida: new Date(), crudo,
-    });
-    conversacion.deClienteParaSistema = false;
-    conversacion.ultimoMensaje = mensaje.toObject();
-    await conversacion.save();
+    const recibido = await Mensaje.findOne({ conversacionId, deClienteParaSistema: true }).sort({ createdAt: -1, _id: -1 });
+    try {
+        mensaje = await Mensaje.create({ conversacionId, contenido, emisor: recibido?.receptor,
+            receptor: conversacion.telefono, mediaPhoneNumberId: recibido?.mediaPhoneNumberId,
+            solicitudEnvioId: datos.solicitudId, vendedorId: datos.usuarioId,
+            deClienteParaSistema: false, deSistemaParaCliente: true, respuestaAutomatica: false,
+            usoLLM: false, estadoEnvio: 'enviando', fechaEmitida: new Date() });
+    } catch (error) {
+        if (error.code === 11000) return Mensaje.findOne({ solicitudEnvioId: datos.solicitudId });
+        throw error;
+    }
     await sockets.notificarCambios(conversacion, mensaje);
+    await envios.serializar(async () => {
+        let aceptado = false;
+        try {
+            const crudo = await require('./whatsapp').enviarMensaje({ to: conversacion.telefono, text: contenido,
+                phoneNumberId: recibido?.mediaPhoneNumberId });
+            const whatsappId = crudo?.messages?.[0]?.id;
+            if (typeof whatsappId !== 'string' || !whatsappId) throw new Error('WhatsApp no confirmó el envío.');
+            aceptado = true;
+            mensaje.whatsappId = whatsappId;
+            mensaje.crudo = crudo;
+            mensaje.estadoEnvio = 'enviado';
+            mensaje.estadoProcesamiento = 'completado';
+            // La fecha de emisión corresponde al envío efectivo, no al momento de encolarlo.
+            mensaje.fechaEmitida = new Date();
+            await mensaje.save();
+            await Conversacion.findOneAndUpdate({ _id: conversacionId }, { $set: {
+                deClienteParaSistema: false, ultimoMensaje: mensaje.toObject(), requiereAtencion: false, motivoDerivacion: '',
+            } });
+        } catch (error) {
+            mensaje.estadoEnvio = aceptado ? 'enviado' : error.envioNoIniciado || (error.status >= 400 && error.status < 500 && error.status !== 408) ? 'fallido' : 'envio_incierto';
+            mensaje.errorEnvio = error.message.slice(0, 1000);
+            await mensaje.save();
+            if (!aceptado) await Conversacion.updateOne({ _id: conversacionId }, { $set: {
+                requiereAtencion: true, motivoDerivacion: mensaje.estadoEnvio === 'fallido' ? 'La respuesta del vendedor no se pudo enviar.' : 'Revisar una respuesta con envío sin confirmar.',
+            } });
+        }
+    });
+    await sockets.notificarCambios(await Conversacion.findById(conversacionId), mensaje);
     return mensaje;
-} */
+}
 
 module.exports = {
     recibirMensajeWhatsapp,
-    /*
     recibirMensajeVendedor,
-    */
 };

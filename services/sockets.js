@@ -51,13 +51,16 @@ async function recibirMensaje(socket, datos, responder) {
             socket.disconnect(true);
             return;
         }
-        const { conversacionId, contenido } = datos || {};
-        if (!mongoose.isObjectIdOrHexString(conversacionId) || typeof contenido !== 'string' || !contenido.trim()) {
+        const { conversacionId, contenido, solicitudId } = datos || {};
+        if (!mongoose.isObjectIdOrHexString(conversacionId) || typeof contenido !== 'string' || !contenido.trim() || contenido.trim().length > 4096
+            || typeof solicitudId !== 'string' || !/^[a-f0-9-]{36}$/i.test(solicitudId)) {
             return responder({ error: 'Indicá una conversación válida y un mensaje.' });
         }
         const orquestador = require('./orquestador');
-        const mensaje = await orquestador.recibirMensajeVendedor(conversacionId, contenido.trim());
-        responder({ mensaje });
+        const mensaje = await orquestador.recibirMensajeVendedor(conversacionId, contenido.trim(), { solicitudId, usuarioId: socket.request.session.usuarioId });
+        responder({ mensaje, ...(mensaje.estadoEnvio && mensaje.estadoEnvio !== 'enviado' && { error: mensaje.estadoEnvio === 'fallido'
+            ? 'WhatsApp rechazó el envío. Revisá el mensaje y la configuración antes de volver a enviar.'
+            : 'El envío sigue pendiente o no pudo confirmarse. Revisá la conversación antes de volver a enviarlo.' }) });
     } catch (error) {
         console.error(error);
         responder({ error: 'No se pudo enviar el mensaje.' });

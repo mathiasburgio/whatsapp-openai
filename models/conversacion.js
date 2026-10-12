@@ -6,7 +6,13 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
     nombre: String, //nombre del cliente
     telefono: String, //telefono del cliente
     resumen: String, //resumen de la conversacion q va generando el bot
+    turnosDesdeResumen: { type: Number, default: 0 },
+    origenInicializado: { type: Boolean, default: false },
+    origenPromocion: mixed,
+    requiereAtencion: { type: Boolean, default: false },
+    motivoDerivacion: String,
     botActivo: { type: Boolean, default: false }, //si debe auto-contestar el LLM
+    revisionBot: { type: Number, default: 0 }, //invalida respuestas en curso al cambiar el control
     ultimoMensaje: mixed, //copia del schema de "mensaje"
 
 
@@ -41,6 +47,7 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
 
 // Permite buscar las conversaciones de un teléfono por actualización.
 conversacionSchema.index({ telefono: 1, updatedAt: -1 });
+conversacionSchema.index({ requiereAtencion: -1, updatedAt: -1, _id: -1 });
 module.exports = mongoose.model('Conversacion', conversacionSchema);
 
 /*

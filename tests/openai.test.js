@@ -119,6 +119,18 @@ test('los cupos bloquean antes de enviar, incluso con llamadas simultáneas', as
     assert.equal(llamadas, 1);
 });
 
+test('los prompts del bot usan un esquema JSON estricto y devuelven un objeto', async t => {
+    const { api, registros } = preparar(t);
+    const schema = { type: 'object', properties: { mensaje: { type: 'string' } }, required: ['mensaje'], additionalProperties: false };
+    global.fetch = async (url, opciones) => {
+        assert.deepEqual(JSON.parse(opciones.body).text.format, { type: 'json_schema', name: 'respuesta', schema, strict: true });
+        return respuesta({ output_text: '{"mensaje":"Hola"}' });
+    };
+    assert.deepEqual((await api.procesarTexto('Cliente', { instrucciones: 'Reglas.', esquema: { nombre: 'respuesta', schema } })).resultado, { mensaje: 'Hola' });
+    assert.equal(registros[0].contexto, 'Reglas.');
+    assert.equal(registros[0].tokensTotal, 15);
+});
+
 test('el audio usa transcripciones, mide duración y registra tokens y segundos', async t => {
     const { api, registros } = preparar(t);
     global.fetch = async (url, opciones) => {

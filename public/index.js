@@ -6,24 +6,40 @@ let cargandoMensajes = false;
 let hayMasMensajes = false;
 let guardandoBot = null;
 let solicitudMetricas = 0;
+let promptsDisponibles = [];
+let promptActual = null;
+let contenidoInicialPrompt = '';
+let solicitudPrompts = 0;
+let guardandoPrompt = false;
+let resolverDescartePrompt = null;
+let modoListado = 'ultimas';
+let solicitudConversaciones = 0;
+let enviandoMensaje = false;
+const solicitudesEnvio = new Map();
 const socket = io({ autoConnect: false });
 
 socket.on('connect', obtenerConversaciones);
 socket.on('cambios', recibirCambios);
 socket.on('disconnect', motivo => {
     if (motivo === 'io server disconnect') {
+        solicitudConversaciones++;
         conversaciones = [];
         conversacionActual = null;
         mensajes = [];
         limpiarMetricas();
+        limpiarPrompts();
+        solicitudesEnvio.clear();
         actualizarControlBot();
         $('body').attr('data-estado', 'login');
     }
 });
 socket.on('connect_error', error => {
     if (error.data?.sesionInactiva) {
+        solicitudConversaciones++;
         socket.disconnect();
         $('body').attr('data-estado', 'login');
+        limpiarPrompts();
+        limpiarMetricas();
     }
     Swal.fire({ icon: 'error', text: error.message });
 });
@@ -45,17 +61,19 @@ function recibirCambios({ conversacion, mensaje }) {
     }
 }
 
-function enviarPorSocket(conversacionId, contenido) {
+function enviarPorSocket(conversacionId, contenido, solicitudId) {
     return new Promise((resolve, reject) => {
         if (!socket.connected) return reject(new Error('No hay conexión con el servidor.'));
-        socket.timeout(15000).emit('enviar-mensaje', { conversacionId, contenido }, (error, respuesta) => {
+        socket.timeout(30000).emit('enviar-mensaje', { conversacionId, contenido, solicitudId }, (error, respuesta) => {
             if (error) return reject(new Error('No se pudo confirmar el envío.'));
             if (respuesta.error) {
+                if (respuesta.mensaje) recibirCambios({ mensaje: respuesta.mensaje });
                 if (respuesta.sesionInactiva) {
+                    solicitudConversaciones++;
                     socket.disconnect();
                     $('body').attr('data-estado', 'login');
                 }
-                return reject(new Error(respuesta.error));
+                return reject(Object.assign(new Error(respuesta.error), { mensaje: respuesta.mensaje }));
             }
             resolve(respuesta.mensaje);
         });
@@ -87,6 +105,7 @@ async function cerrarSesion(){
     $('#btn-cerrar-sesion').prop('disabled', true);
     try{
         await $.post('/cerrar-sesion');
+        solicitudConversaciones++;
         socket.disconnect();
         conversaciones = [];
         conversacionActual = null;
@@ -99,6 +118,8 @@ async function cerrarSesion(){
         $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
         actualizarControlBot();
         limpiarMetricas();
+        limpiarPrompts();
+        solicitudesEnvio.clear();
         $('body').attr('data-estado', 'login');
     }catch(error){
         Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudo cerrar sesión.' });
@@ -108,16 +129,41 @@ async function cerrarSesion(){
 }
 
 async function obtenerConversaciones(){
+    const solicitud = ++solicitudConversaciones;
     try{
-        conversaciones = await $.get('/conversaciones');
+        const respuesta = await $.get('/conversaciones', { orden: modoListado });
+        if (solicitud !== solicitudConversaciones) return;
+        conversaciones = respuesta;
         listarConversaciones();
-        const conversacionId = conversacionActual?._id || conversaciones[0]?._id;
+        const conversacionId = conversaciones.find(c => c._id === conversacionActual?._id)?._id || ordenarConversaciones(conversaciones)[0]?._id;
         if (conversacionId) await obtenerMensajes(conversacionId);
+        else {
+            conversacionActual = null; mensajes = []; hayMasMensajes = false;
+            $('#mensajes').empty(); $('#nombre-conversacion').text('Seleccioná una conversación');
+            $('#telefono-conversacion').text('');
+            $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
+            actualizarControlBot();
+        }
         return conversaciones;
     }catch(error){
         if (error.status === 401) $('body').attr('data-estado', 'login');
         Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudieron obtener las conversaciones.' });
     }
+}
+
+function faltaResponder(conversacion) {
+    return !!conversacion.requiereAtencion || !!conversacion.ultimoMensaje?.deClienteParaSistema;
+}
+function ordenarConversaciones(lista) {
+    return [...lista].sort((a, b) => Number(!!b.requiereAtencion) - Number(!!a.requiereAtencion)
+        || (new Date(b.updatedAt || b.ultimoMensaje?.fechaEmitida).getTime() || 0) - (new Date(a.updatedAt || a.ultimoMensaje?.fechaEmitida).getTime() || 0));
+}
+function cambiarVistaListado(modo) {
+    modoListado = modo;
+    $('#btn-orden-ultimas').attr('aria-pressed', modo === 'ultimas' ? 'true' : 'false');
+    $('#btn-orden-pendientes').attr('aria-pressed', modo === 'pendientes' ? 'true' : 'false');
+    listarConversaciones();
+    obtenerConversaciones();
 }
 
 function escaparHtml(texto) {
@@ -129,6 +175,15 @@ function actualizarControlBot() {
     $('#bot-activo').prop('checked', !!conversacionActual?.botActivo)
         .prop('disabled', !conversacionActual || guardandoBot === conversacionActual._id);
     $('#estado-bot').text(conversacionActual?.botActivo ? 'Bot activo' : 'Bot inactivo');
+    $('#bot-detalle').text(conversacionActual?.requiereAtencion
+        ? 'Atención del vendedor: ' + (conversacionActual.motivoDerivacion || 'Consulta derivada.')
+        : conversacionActual?.botActivo ? 'Respuestas automáticas habilitadas para los próximos mensajes.' : 'Al activarlo, el bot responderá a los próximos mensajes.');
+    const origen = conversacionActual?.origenPromocion;
+    $('#origen-conversacion').prop('hidden', !origen).text(origen ? textoOrigen(origen) + (origen.palabraClave ? ' · ' + origen.palabraClave : '') : '');
+}
+
+function textoOrigen(origen) {
+    return (origen.fuente === 'meta' ? (origen.referenciaMeta?.source_type === 'ad' ? 'Anuncio de Meta' : 'Referencia de Meta') : 'Promoción por texto') + ' · ' + origen.nombre;
 }
 
 async function cambiarEstadoBot() {
@@ -153,19 +208,29 @@ async function cambiarEstadoBot() {
 
 function limpiarMetricas() {
     solicitudMetricas++;
-    if (typeof bootstrap !== 'undefined') bootstrap.Modal.getInstance(document.getElementById('modal-metricas'))?.hide();
+    cerrarMetricas();
     $('#metricas-contenido').prop('hidden', true);
     $('#periodo-metricas, #metricas-detalle-tokens').text('');
     $('#metrica-web, #metrica-textos, #metrica-segundos, #metrica-tokens, #metrica-imagenes, #metrica-respuestas').text('—');
 }
 
+function cerrarMetricas() {
+    const modal = document.getElementById('modal-metricas');
+    if (!modal?.open) return;
+    if (typeof modal.close === 'function') modal.close();
+    else modal.removeAttribute('open');
+}
+
 async function mostrarMetricas() {
     const solicitud = ++solicitudMetricas;
-    const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('modal-metricas'));
+    const modal = document.getElementById('modal-metricas');
     $('#metricas-contenido').prop('hidden', true);
     $('#periodo-metricas').text('');
     $('#metricas-estado').prop('hidden', false).text('Cargando métricas…');
-    modal.show();
+    if (!modal.open) {
+        if (typeof modal.showModal === 'function') modal.showModal();
+        else modal.setAttribute('open', '');
+    }
     try {
         const metricas = await $.get('/metricas/mes');
         if (solicitud !== solicitudMetricas) return;
@@ -187,20 +252,20 @@ async function mostrarMetricas() {
 
 function listarConversaciones(){
     const buscar = $('#buscar-conversacion').val().trim().toLowerCase();
-    const html = conversaciones.map(conversacion => {
+    const html = ordenarConversaciones(conversaciones).filter(conversacion => modoListado !== 'pendientes' || faltaResponder(conversacion)).map(conversacion => {
         const telefono = conversacion.telefono || '';
         const nombre = conversacion.nombre || telefono || 'Sin nombre';
         if (!(nombre + ' ' + telefono).toLowerCase().includes(buscar)) return '';
         const ultimoMensaje = conversacion.ultimoMensaje;
         const enviado = ultimoMensaje?.deSistemaParaCliente;
         const estado = ultimoMensaje?.fechaLeida ? 'leido' : ultimoMensaje?.fechaEntrega ? 'entregado' : 'emitido';
-        const leadGuardado = conversacion.intereses?.at(-1)?.lead?.toLowerCase();
+        const leadGuardado = conversacion.requiereAtencion ? 'derivación' : conversacion.intereses?.at(-1)?.lead?.toLowerCase();
         const lead = { frio: 'cold', frío: 'cold', cold: 'cold', tibio: 'warm', warm: 'warm',
             caliente: 'hot', hot: 'hot', derivación: 'handoff', derivacion: 'handoff', handoff: 'handoff' }[leadGuardado] || 'cold';
         const seleccionada = conversacionActual?._id === conversacion._id;
         const estadoTexto = { leido: 'Leído', entregado: 'Entregado', emitido: 'Enviado' }[estado];
         return `
-            <button type="button" class="conversacion ${seleccionada ? 'seleccionada' : ''}"
+            <button type="button" class="conversacion ${seleccionada ? 'seleccionada' : ''} ${conversacion.requiereAtencion ? 'requiere-vendedor' : ''}"
                 data-conversacion-id="${escaparHtml(conversacion._id)}" ${seleccionada ? 'aria-current="true"' : ''}>
                 <span class="nombre-contacto">${escaparHtml(nombre)}</span>
                 <span class="telefono-contacto">${escaparHtml(telefono)}</span>
@@ -214,6 +279,8 @@ function listarConversaciones(){
                     </span>
                 </span>
                 <span class="tags-conversacion">
+                    ${conversacion.requiereAtencion ? '<span class="badge tag lead-warm">Requiere vendedor</span>' : ''}
+                    ${conversacion.origenPromocion ? `<span class="badge tag origen-promocion" title="${escaparHtml(textoOrigen(conversacion.origenPromocion))}">${escaparHtml(conversacion.origenPromocion.nombre)} · ${conversacion.origenPromocion.fuente === 'meta' ? 'Meta' : 'por texto'}</span>` : ''}
                     <span class="badge tag lead-${lead}">${lead}</span>
                     <span class="badge tag bot-${conversacion.botActivo ? 'activo' : 'inactivo'}">
                         <i class="fa-solid fa-circle" aria-hidden="true"></i>
@@ -264,7 +331,8 @@ async function obtenerMensajes(conversacionId, pagina = 0){
     }finally{
         if (conversacionActual?._id === conversacionId) {
             cargandoMensajes = false;
-            $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', false);
+            $('#texto-mensaje').prop('disabled', false);
+            $('#btn-enviar-mensaje').prop('disabled', enviandoMensaje || !socket.connected);
         }
     }
 }
@@ -327,7 +395,10 @@ function listarMensajes(){
             meta.append($('<time>', { datetime: fecha.toISOString(), title: fecha.toLocaleString('es-AR') })
                 .text(fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false })));
         }
-        if (enviado) meta.append($('<i>', {
+        if (enviado && mensaje.estadoEnvio && mensaje.estadoEnvio !== 'enviado') meta.append($('<span>', {
+            class: mensaje.estadoEnvio === 'enviando' ? '' : 'estado-envio-error',
+        }).text({ enviando: 'Enviando…', fallido: 'No enviado', envio_incierto: 'Envío sin confirmar' }[mensaje.estadoEnvio] || 'Pendiente'));
+        else if (enviado) meta.append($('<i>', {
             class: 'fa-solid fa-check' + (mensaje.fechaLeida || mensaje.fechaEntrega ? '-double' : '') + (mensaje.fechaLeida ? ' estado-leido' : ''),
             'aria-label': mensaje.fechaLeida ? 'Leído' : mensaje.fechaEntrega ? 'Entregado' : 'Enviado'
         }));
@@ -339,33 +410,188 @@ function listarMensajes(){
 async function enviarMensaje(){
     const contenido = $('#texto-mensaje').val().trim();
     const conversacion = conversacionActual;
-    if (!conversacion || !contenido || $('#btn-enviar-mensaje').prop('disabled')) return;
+    if (!conversacion || !contenido || enviandoMensaje || $('#btn-enviar-mensaje').prop('disabled')) return;
+    if (contenido.length > 4096) { Swal.fire({ icon: 'error', text: 'El mensaje admite hasta 4096 caracteres.' }); return; }
+    let solicitud = solicitudesEnvio.get(conversacion._id);
+    if (!solicitud || solicitud.contenido !== contenido) {
+        solicitud = { contenido, id: crypto.randomUUID() };
+        solicitudesEnvio.set(conversacion._id, solicitud);
+    }
+    enviandoMensaje = true;
     $('#btn-enviar-mensaje').prop('disabled', true);
     try{
-        const mensaje = await enviarPorSocket(conversacion._id, contenido);
+        const mensaje = await enviarPorSocket(conversacion._id, contenido, solicitud.id);
+        solicitudesEnvio.delete(conversacion._id);
+        if (!conversaciones.some(c => c._id === conversacion._id)) return;
         if (conversacionActual?._id === conversacion._id) {
             recibirCambios({ mensaje });
             if ($('#texto-mensaje').val().trim() === contenido) $('#texto-mensaje').val('');
         }
-        Object.assign(conversacion, {
-            deClienteParaSistema: false,
-            ultimoMensaje: mensaje
-        });
+        if (!conversacion.ultimoMensaje?.fechaEmitida || new Date(conversacion.ultimoMensaje.fechaEmitida) <= new Date(mensaje.fechaEmitida)) {
+            Object.assign(conversacion, { deClienteParaSistema: false, ultimoMensaje: mensaje });
+        }
         conversaciones = [conversacion, ...conversaciones.filter(c => c._id !== conversacion._id)];
         listarConversaciones();
     }catch(error){
+        if (error.mensaje?.estadoEnvio === 'fallido') solicitudesEnvio.delete(conversacion._id);
         if (error.status === 401) $('body').attr('data-estado', 'login');
         Swal.fire({ icon: 'error', text: error.message || 'No se pudo enviar el mensaje.' });
     }finally{
-        $('#btn-enviar-mensaje').prop('disabled', !conversacionActual || cargandoMensajes);
+        enviandoMensaje = false;
+        $('#btn-enviar-mensaje').prop('disabled', !conversacionActual || cargandoMensajes || !socket.connected);
     }
 }
 
+function contenidoEditor() {
+    if (promptActual?.id !== 'promociones') return $('#prompt-contenido').val();
+    const promociones = Array.from(document.querySelectorAll('.regla-promocion')).map(fila => ({
+        id: fila.dataset.id,
+        nombre: fila.querySelector('[data-campo="nombre"]').value.trim(),
+        palabrasClave: fila.querySelector('[data-campo="palabrasClave"]').value.split('\n').map(frase => frase.trim()).filter(Boolean),
+        marca: fila.querySelector('[data-campo="marca"]').value.trim() || null,
+        modelo: fila.querySelector('[data-campo="modelo"]').value.trim() || null,
+    }));
+    return JSON.stringify({ promociones }, null, 2) + '\n';
+}
+function hayCambiosPrompt() { return !!promptActual && contenidoEditor() !== contenidoInicialPrompt; }
+function actualizarEstadoEditor() {
+    $('#btn-guardar-prompt').prop('disabled', guardandoPrompt || !hayCambiosPrompt());
+    $('#prompt-estado').text(hayCambiosPrompt() ? 'Cambios sin guardar.' : '');
+}
+function agregarReglaPromocion(regla = {}) {
+    const id = regla.id || 'promo-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+    $('#reglas-promociones').append(`<section class="regla-promocion" data-id="${escaparHtml(id)}">
+        <label>Nombre de la promoción<input class="form-control" data-campo="nombre" maxlength="160" value="${escaparHtml(regla.nombre || '')}" placeholder="Ej. CORVEN XXX – Facebook"></label>
+        <label>Frases para detectar (una por línea)<textarea class="form-control" data-campo="palabrasClave" rows="2" aria-label="Frases para detectar (una por línea)" placeholder="Más info de CORVEN XXX">${escaparHtml((regla.palabrasClave || []).join('\n'))}</textarea></label>
+        <div class="filtros"><label>Marca (opcional)<input class="form-control" data-campo="marca" maxlength="80" value="${escaparHtml(regla.marca || '')}"></label>
+        <label>Modelo (opcional)<input class="form-control" data-campo="modelo" maxlength="80" value="${escaparHtml(regla.modelo || '')}"></label></div>
+        <button type="button" class="btn btn-outline-danger btn-sm mt-3" data-eliminar-promocion>Eliminar promoción</button>
+    </section>`);
+}
+function seleccionarPrompt(id) {
+    promptActual = promptsDisponibles.find(item => item.id === id) || null;
+    if (!promptActual) return;
+    $('#prompt-selector').val(id);
+    $('#prompt-descripcion').text(promptActual.descripcion);
+    const esPromociones = id === 'promociones';
+    $('#prompt-contenido, #prompt-etiqueta').prop('hidden', esPromociones);
+    $('#editor-promociones').prop('hidden', !esPromociones);
+    $('#prompt-contenido').val(promptActual.contenido).prop('disabled', false);
+    $('#reglas-promociones').empty();
+    if (esPromociones) {
+        try { JSON.parse(promptActual.contenido).promociones.forEach(agregarReglaPromocion); }
+        catch { $('#prompt-estado').text('La configuración de promociones no es válida. Revisá PROMOCIONES.json en el servidor.'); promptActual = null; return; }
+    }
+    contenidoInicialPrompt = contenidoEditor();
+    actualizarEstadoEditor();
+}
+function confirmarDescartar() {
+    if (!hayCambiosPrompt()) return Promise.resolve(true);
+    if (resolverDescartePrompt) return Promise.resolve(false);
+    document.getElementById('modal-descartar-prompts').showModal();
+    return new Promise(resolve => { resolverDescartePrompt = resolve; });
+}
+function resolverDescarte(descartar) {
+    const modal = document.getElementById('modal-descartar-prompts');
+    if (modal?.open) modal.close();
+    const resolver = resolverDescartePrompt;
+    resolverDescartePrompt = null;
+    resolver?.(descartar);
+}
+async function cargarPrompts() {
+    if (guardandoPrompt || !await confirmarDescartar()) return;
+    const solicitud = ++solicitudPrompts;
+    const id = promptActual?.id;
+    promptActual = null;
+    $('#prompt-estado').text('Cargando…');
+    $('#prompt-selector, #prompt-contenido, #btn-guardar-prompt').prop('disabled', true);
+    try {
+        const lista = await $.get('/prompts');
+        if (solicitud !== solicitudPrompts) return;
+        promptsDisponibles = lista;
+        $('#prompt-selector').html(lista.map(item => `<option value="${escaparHtml(item.id)}">${escaparHtml(item.nombre)}</option>`).join('')).prop('disabled', false);
+        seleccionarPrompt(lista.some(item => item.id === id) ? id : lista[0]?.id);
+    } catch (error) {
+        if (solicitud !== solicitudPrompts) return;
+        $('#prompt-estado').text(error.responseJSON?.error || 'No se pudieron cargar los prompts.');
+        if (error.status === 401) { socket.disconnect(); $('body').attr('data-estado', 'login'); limpiarPrompts(); }
+    }
+}
+function mostrarPrompts() {
+    const modal = document.getElementById('modal-prompts');
+    if (!modal.open) modal.showModal();
+    cargarPrompts();
+}
+async function cerrarPrompts() {
+    if (guardandoPrompt || !await confirmarDescartar()) return;
+    limpiarPrompts();
+}
+function limpiarPrompts() {
+    resolverDescarte(false);
+    solicitudPrompts++;
+    promptsDisponibles = [];
+    promptActual = null;
+    contenidoInicialPrompt = '';
+    const modal = document.getElementById('modal-prompts');
+    if (modal?.open) modal.close();
+    $('#prompt-contenido').val('');
+    $('#reglas-promociones, #prompt-selector').empty();
+    $('#btn-guardar-prompt').prop('disabled', true);
+}
+async function guardarPrompt() {
+    if (!promptActual || guardandoPrompt || !hayCambiosPrompt()) return;
+    const solicitud = solicitudPrompts;
+    const actual = promptActual;
+    const contenido = contenidoEditor();
+    guardandoPrompt = true;
+    $('#modal-prompts input, #modal-prompts textarea, #modal-prompts select, #modal-prompts button').prop('disabled', true);
+    $('#prompt-estado').text('Guardando…');
+    try {
+        const actualizado = await $.post({ url: '/prompts/' + encodeURIComponent(actual.id), contentType: 'application/json',
+            data: JSON.stringify({ contenido, version: actual.version }) });
+        if (solicitud !== solicitudPrompts) return;
+        Object.assign(actual, actualizado);
+        contenidoInicialPrompt = contenido;
+        $('#prompt-estado').text('Cambios guardados. Se usarán en los próximos mensajes.');
+    } catch (error) {
+        if (solicitud !== solicitudPrompts) return;
+        $('#prompt-estado').text(error.responseJSON?.error || 'No se pudo guardar. Tus cambios siguen en el editor.');
+        if (error.status === 401) { socket.disconnect(); $('body').attr('data-estado', 'login'); limpiarPrompts(); }
+    } finally {
+        guardandoPrompt = false;
+        $('#modal-prompts input, #modal-prompts textarea, #modal-prompts select, #modal-prompts button').prop('disabled', false);
+        $('#btn-guardar-prompt').prop('disabled', !hayCambiosPrompt());
+    }
+}
+
+$('#btn-prompts').on('click', mostrarPrompts);
+$('#btn-descartar-prompt').on('click', () => resolverDescarte(true));
+$('#btn-conservar-prompt').on('click', () => resolverDescarte(false));
+$('#modal-descartar-prompts').on('cancel', ev => { ev.preventDefault(); resolverDescarte(false); });
+$('[data-cerrar-prompts]').on('click', cerrarPrompts);
+$('#modal-prompts').on('cancel', ev => { ev.preventDefault(); cerrarPrompts(); });
+$('#btn-guardar-prompt').on('click', guardarPrompt);
+$('#btn-recargar-prompts').on('click', cargarPrompts);
+$('#prompt-contenido, #reglas-promociones').on('input', actualizarEstadoEditor);
+$('#btn-agregar-promocion').on('click', () => { if (!guardandoPrompt) { agregarReglaPromocion(); actualizarEstadoEditor(); } });
+$('#reglas-promociones').on('click', '[data-eliminar-promocion]', ev => {
+    if (guardandoPrompt) return;
+    $(ev.currentTarget).closest('.regla-promocion').remove(); actualizarEstadoEditor();
+});
+$('#prompt-selector').on('change', async () => {
+    const id = $('#prompt-selector').val();
+    if (await confirmarDescartar()) seleccionarPrompt(id);
+    else $('#prompt-selector').val(promptActual?.id);
+});
+
 $('#form-login').on('submit', ev => { ev.preventDefault(); iniciarSesion(); });
+$('#btn-orden-ultimas').on('click', () => cambiarVistaListado('ultimas'));
+$('#btn-orden-pendientes').on('click', () => cambiarVistaListado('pendientes'));
 $('#buscar-conversacion').on('input', listarConversaciones);
 $('#btn-enviar-mensaje').on('click', enviarMensaje);
 $('#btn-cerrar-sesion').on('click', cerrarSesion);
 $('#btn-metricas').on('click', mostrarMetricas);
+$('[data-cerrar-metricas]').on('click', cerrarMetricas);
 $('#bot-activo').on('change', cambiarEstadoBot);
 $('#texto-mensaje').on('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.originalEvent.isComposing) {

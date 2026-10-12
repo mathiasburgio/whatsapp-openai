@@ -43,7 +43,7 @@ async function recibirMensajeWebhook(req, res){
                     || recibido.document?.caption || recibido.button?.text
                     || recibido.interactive?.button_reply?.title || recibido.interactive?.list_reply?.title
                     || `[Mensaje de tipo ${recibido.type || 'desconocido'}]`;
-                console.log('Mensaje entrante de WhatsApp:', { telefono, nombre, tipo: recibido.type, mensaje, id: recibido.id });
+                // console.log('Mensaje entrante de WhatsApp:', { telefono, nombre, tipo: recibido.type, mensaje, id: recibido.id });
                 try {
                     await orquestador.recibirMensajeWhatsapp(telefono,
                         recibido.type === 'image' || recibido.type === 'audio' ? (recibido[recibido.type]?.caption || '') : mensaje,
@@ -102,7 +102,10 @@ async function configurarWebhook(req, res){
 }
 
 async function enviarMensaje({ to, text, phoneNumberId = defaultPhoneNumberId, replyToMessageId=null }) {
-
+    if (!accessToken || !phoneNumberId || typeof to !== 'string' || !/^\d{5,20}$/.test(to)
+        || typeof text !== 'string' || !text.trim() || text.length > 4096) {
+        throw Object.assign(new Error('Faltan credenciales de WhatsApp o los datos del envío son inválidos.'), { envioNoIniciado: true });
+    }
     const payload = {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
@@ -117,7 +120,7 @@ async function enviarMensaje({ to, text, phoneNumberId = defaultPhoneNumberId, r
     if (replyToMessageId) payload.context = { message_id: replyToMessageId };
 
     const response = await fetch(
-        `${graphApiBaseUrl}/${apiVersion}/${phoneNumberId}/messages`,
+        `${graphApiBaseUrl}/${apiVersion}/${encodeURIComponent(phoneNumberId)}/messages`,
         {
             method: 'POST',
             headers: {
@@ -137,7 +140,7 @@ async function enviarMensaje({ to, text, phoneNumberId = defaultPhoneNumberId, r
         responseBody = responseText;
     }
 
-    if (!response.ok) throw new Error(`WhatsApp API ${response.status}: ${JSON.stringify(responseBody)}`);
+    if (!response.ok) throw Object.assign(new Error(`WhatsApp API ${response.status}: ${JSON.stringify(responseBody)}`), { status: response.status });
 
     return responseBody;
 }

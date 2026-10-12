@@ -19,6 +19,14 @@ const mensajeSchema = new mongoose.Schema({
 
     usoLLM: Boolean,
     respuestaAutomatica: Boolean, //respuesta del bot aceptada por WhatsApp
+    respuestaA: oid, //mensaje del cliente que originó la respuesta automática
+    estadoBot: String, //pendiente, procesando, enviando, respondido, derivado, omitido, fallido o envio_incierto
+    revisionBot: Number,
+    errorBot: String,
+    solicitudEnvioId: String, //clave de reintento del envío manual desde el panel
+    estadoEnvio: String, //enviando, enviado, fallido o envio_incierto
+    errorEnvio: String,
+    vendedorId: oid,
     accionEjecutada: String, //que accion llamo el LLM
     parametroEjecutado: String, //parametro que uso el LLM (ej "ando buscando una moto honda navi"-> "moto honda navi")
     parametroRecibido: String, //parametro que recibio el LLM (ej {_id: "12345", marca: "honda", modelo: "navi", estado: "nueva"})
@@ -49,4 +57,6 @@ const mensajeSchema = new mongoose.Schema({
 // Permite paginar los mensajes de una conversación por fecha.
 mensajeSchema.index({ conversacionId: 1, createdAt: -1 });
 mensajeSchema.index({ whatsappId: 1 }, { unique: true, partialFilterExpression: { whatsappId: { $type: 'string' } } });
+mensajeSchema.index({ respuestaA: 1 }, { unique: true, partialFilterExpression: { respuestaA: { $type: 'objectId' }, respuestaAutomatica: true } });
+mensajeSchema.index({ solicitudEnvioId: 1 }, { unique: true, partialFilterExpression: { solicitudEnvioId: { $type: 'string' } } });
 module.exports = mongoose.model('Mensaje', mensajeSchema);

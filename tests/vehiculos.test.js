@@ -1,0 +1,30 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const vehiculos = require('../services/vehiculos');
+test('catálogo desactivado no consulta; activado envía filtros y proyecta solo datos comerciales', async t => {
+    const entorno = ['VEHICULOS_API_HABILITADA', 'VEHICULOS_API_URL', 'VEHICULOS_API_TOKEN'].map(nombre => [nombre, process.env[nombre]]);
+    t.after(() => entorno.forEach(([nombre, valor]) => { if (valor === undefined) delete process.env[nombre]; else process.env[nombre] = valor; }));
+    let consultas = 0;
+    t.mock.method(global, 'fetch', async (url, opciones) => {
+        consultas++;
+        assert.equal(url.origin + url.pathname, 'https://rpsbikes.com.ar/search');
+        assert.equal(url.searchParams.get('marca'), 'Corven');
+        assert.equal(url.searchParams.get('modelo'), 'XXX');
+        assert.equal(url.searchParams.get('estado'), 'nuevo');
+        assert.equal(url.searchParams.get('precio_maximo'), '100');
+        assert.equal(url.searchParams.has('privado'), false);
+        assert.equal(opciones.headers.Authorization, 'Bearer prueba');
+        return new Response(JSON.stringify({ vehiculos: [{ marca: 'Corven', modelo: 'XXX', precio: 100, moneda: 'ARS', credencial: 'secreto' }] }));
+    });
+    process.env.VEHICULOS_API_HABILITADA = 'false';
+    const filtro = { marca: 'Corven', modelo: 'XXX', estado: 'nuevo', precio_maximo: 100, privado: 'ignorado' };
+    assert.equal((await vehiculos.buscar(filtro)).estado, 'sin_configurar');
+    assert.equal(consultas, 0);
+    process.env.VEHICULOS_API_HABILITADA = 'true';
+    process.env.VEHICULOS_API_URL = 'https://rpsbikes.com.ar/search';
+    process.env.VEHICULOS_API_TOKEN = 'prueba';
+    const resultado = await vehiculos.buscar(filtro);
+    assert.equal(resultado.estado, 'ok');
+    assert.equal(resultado.vehiculos[0].credencial, undefined);
+    assert.equal(resultado.vehiculos[0].precio, 100);
+});

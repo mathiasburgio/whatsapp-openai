@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Module } = require('node:module');
+const { Module, createRequire } = require('node:module');
 const vm = require('node:vm');
 const mongoose = require('mongoose');
 const Conversacion = require('../models/conversacion');
@@ -11,7 +11,8 @@ const Mensaje = require('../models/mensaje');
 function cargarServicio(nombre, mocks) {
     const filename = path.join(__dirname, '..', 'services', `${nombre}.js`);
     const isolatedModule = new Module(filename);
-    isolatedModule.require = name => Object.hasOwn(mocks, name) ? mocks[name] : require(name);
+    const original = createRequire(filename);
+    isolatedModule.require = name => Object.hasOwn(mocks, name) ? mocks[name] : original(name);
     isolatedModule._compile(fs.readFileSync(filename, 'utf8'), filename);
     return isolatedModule.exports;
 }
@@ -30,6 +31,7 @@ test('sockets comparte la sesión, valida conexiones y envíos, y filtra el broa
     }
     const usuarioId = new mongoose.Types.ObjectId().toString();
     const conversacionId = new mongoose.Types.ObjectId().toString();
+    const solicitudId = '11111111-1111-4111-8111-111111111111';
     const enviados = [];
     const sockets = cargarServicio('sockets', {
         'socket.io': { Server },
@@ -73,8 +75,10 @@ test('sockets comparte la sesión, valida conexiones y envíos, y filtra el broa
     assert((await enviar({ conversacionId: 'invalido', contenido: 'Hola' })).error);
     assert((await enviar({ conversacionId, contenido: ' ' })).error);
     assert((await enviar(null)).error);
+    assert((await enviar({ conversacionId, contenido: 'Hola' })).error);
+    assert((await enviar({ conversacionId, contenido: 'x'.repeat(4097), solicitudId })).error);
     assert.equal(enviados.length, 0);
-    assert.equal((await enviar({ conversacionId, contenido: ' Hola ' })).mensaje.contenido, 'Hola');
+    assert.equal((await enviar({ conversacionId, contenido: ' Hola ', solicitudId })).mensaje.contenido, 'Hola');
     assert.deepEqual(enviados, [{ id: conversacionId, contenido: 'Hola' }]);
 
     io.sockets.sockets.set('autorizado', autorizado);
@@ -95,39 +99,57 @@ test('sockets comparte la sesión, valida conexiones y envíos, y filtra el broa
     assert.equal(enviados.length, 1);
 });
 
-test('el orquestador guarda el mensaje del vendedor y notifica después de persistir la conversación', {
-    skip: 'El envío del vendedor está deshabilitado por decisión del usuario.',
-}, async () => {
+test('el orquestador guarda el mensaje del vendedor y notifica después de persistir la conversación', async () => {
     const id = new mongoose.Types.ObjectId();
     const conversacion = new Conversacion({
         _id: id, telefono: '5491112345678',
         ultimoMensaje: { deClienteParaSistema: true, emisor: '5491112345678', receptor: '5491198765432' },
     });
     const pasos = [];
+    const mensajes = [];
     conversacion.save = async () => { pasos.push('conversacion'); };
     const orquestador = cargarServicio('orquestador', {
-        '../models/conversacion': { findById: async () => conversacion },
-        '../models/mensaje': { create: async datos => { pasos.push('mensaje'); return new Mensaje(datos); } },
+        '../models/conversacion': { findById: async () => conversacion, findOneAndUpdate: async (_, update) => {
+            Object.assign(conversacion, update.$set); pasos.push(update.$set.ultimoMensaje ? 'conversacion' : 'pausa'); return conversacion;
+        }, updateOne: async () => {} },
+        '../models/mensaje': {
+            findOne: query => query.solicitudEnvioId ? Promise.resolve(mensajes.find(item => item.solicitudEnvioId === query.solicitudEnvioId))
+                : { sort: async () => ({ receptor: '5491198765432', mediaPhoneNumberId: 'numero-test' }) },
+            create: async datos => { pasos.push('mensaje'); const mensaje = new Mensaje(datos); mensaje.save = async () => mensaje; mensajes.push(mensaje); return mensaje; },
+        },
         './whatsapp': { enviarMensaje: async datos => {
             assert.equal(datos.to, conversacion.telefono);
+            assert.equal(datos.phoneNumberId, 'numero-test');
             pasos.push('whatsapp');
-            return { messages: [{ id: 'wamid.test' }] };
+            return { messages: [{ id: 'wamid.test.' + mensajes.length }] };
         } },
         './sockets': { notificarCambios: async (actual, mensaje) => {
-            pasos.push('broadcast');
-            assert.equal(actual.ultimoMensaje._id.toString(), mensaje._id.toString());
+            pasos.push(mensaje.estadoEnvio === 'enviado' ? 'broadcast' : 'pendiente');
+            if (mensaje.estadoEnvio === 'enviado') assert.equal(actual.ultimoMensaje._id.toString(), mensaje._id.toString());
         } },
     });
+    let numero = 0;
     for (const contenido of ['Primera respuesta', 'Segunda respuesta']) {
-        const mensaje = await orquestador.recibirMensajeVendedor(id.toString(), contenido);
+        numero++;
+        const solicitudId = `11111111-1111-4111-8111-${String(numero).padStart(12, '0')}`;
+        const [mensaje, duplicado] = await Promise.all([
+            orquestador.recibirMensajeVendedor(id.toString(), contenido, { solicitudId }),
+            orquestador.recibirMensajeVendedor(id.toString(), contenido, { solicitudId }),
+        ]);
+        assert.equal(duplicado, mensaje);
+        assert.equal(await orquestador.recibirMensajeVendedor(id.toString(), contenido, { solicitudId }), mensaje);
         assert.equal(mensaje.emisor, '5491198765432');
         assert.equal(mensaje.receptor, conversacion.telefono);
         assert.equal(mensaje.deSistemaParaCliente, true);
         assert.equal(conversacion.ultimoMensaje.contenido, contenido);
-        assert.equal(conversacion.ultimoMensaje.crudo.messages[0].id, 'wamid.test');
+        assert.equal(conversacion.ultimoMensaje.crudo.messages[0].id, 'wamid.test.' + numero);
+        assert.equal(mensaje.whatsappId, 'wamid.test.' + numero);
+        assert.equal(mensaje.respuestaAutomatica, false);
+        assert.equal(mensaje.estadoEnvio, 'enviado');
+        assert.equal(conversacion.botActivo, false);
         assert.equal(conversacion.deClienteParaSistema, false);
     }
-    assert.deepEqual(pasos, ['whatsapp', 'mensaje', 'conversacion', 'broadcast', 'whatsapp', 'mensaje', 'conversacion', 'broadcast']);
+    assert.deepEqual(pasos, ['pausa', 'mensaje', 'pendiente', 'whatsapp', 'conversacion', 'broadcast', 'pausa', 'mensaje', 'pendiente', 'whatsapp', 'conversacion', 'broadcast']);
 });
 
 test('el panel no duplica el mensaje al recibir el broadcast y la confirmación', async () => {

@@ -17,6 +17,7 @@ const cConversaciones = require('./models/conversacion');
 const cMensajes = require('./models/mensaje');
 const archivosService = require('./services/archivos');
 const metricasService = require('./services/metricas');
+const promptsService = require('./services/prompts');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
@@ -90,11 +91,15 @@ app.get("/conversaciones", async (req, res)=>{
         if(!await tieneSesion(req, res)) return;
 
         const {noLeidas} = req.query;
-        const query = noLeidas === 'true' || noLeidas === '1'
+        let query = noLeidas === 'true' || noLeidas === '1'
             ? { 'ultimoMensaje.deClienteParaSistema': true, 'ultimoMensaje.fechaLeida': null } : {};
+        if (req.query.orden === 'pendientes') {
+            const pendientes = { $or: [{ requiereAtencion: true }, { 'ultimoMensaje.deClienteParaSistema': true }] };
+            query = Object.keys(query).length ? { $and: [query, pendientes] } : pendientes;
+        }
         const conversaciones = await cConversaciones
             .find(query)
-            .sort({ updatedAt: -1, _id: -1 })
+            .sort({ requiereAtencion: -1, updatedAt: -1, _id: -1 })
             .limit(300)
         res.json(conversaciones);
     }catch(error){
@@ -133,7 +138,7 @@ app.post('/conversaciones/:conversacionId/bot', async (req, res) => {
             return res.status(400).json({ error: 'Indicá una conversación y un estado del bot válidos.' });
         }
         const conversacion = await cConversaciones.findOneAndUpdate({ _id: conversacionId },
-            { $set: { botActivo: req.body.botActivo } }, { returnDocument: 'after', runValidators: true });
+            { $set: { botActivo: req.body.botActivo }, $inc: { revisionBot: 1 } }, { returnDocument: 'after', runValidators: true });
         if (!conversacion) return res.status(404).json({ error: 'Conversación no encontrada.' });
         await socketsService.notificarCambios(conversacion);
         res.json(conversacion);
@@ -151,6 +156,28 @@ app.get('/metricas/mes', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'No se pudieron obtener las métricas del mes.' });
+    }
+});
+
+app.get('/prompts', async (req, res) => {
+    try {
+        if (!await tieneSesion(req, res)) return;
+        res.set('Cache-Control', 'no-store');
+        res.json(await promptsService.listar());
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'No se pudieron cargar los prompts.' });
+    }
+});
+app.post('/prompts/:id', async (req, res) => {
+    try {
+        if (!await tieneSesion(req, res)) return;
+        const prompt = await promptsService.guardar(req.params.id, req.body?.contenido, req.body?.version);
+        res.set('Cache-Control', 'no-store');
+        res.json(prompt);
+    } catch (error) {
+        if (!error.status) console.error(error);
+        res.status(error.status || 500).json({ error: error.status ? error.message : 'No se pudo guardar el prompt.' });
     }
 });
 

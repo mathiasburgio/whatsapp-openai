@@ -97,6 +97,22 @@
         .metrica dt { color: var(--secundario); font-size: 13px; font-weight: 500; }
         .metrica dd { margin: 6px 0 0; font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; }
         .metricas-nota { margin: 16px 0 0; color: var(--secundario); font-size: 12px; }
+        .metricas-modal { position: fixed; inset: 0; width: min(780px, calc(100% - 24px)); max-height: calc(100dvh - 32px); padding: 0; border: 0; border-radius: 10px; color: var(--texto); background: #fff; box-shadow: 0 12px 48px #111b2133; }
+        .metricas-modal:not([open]) { display: none; }
+        .metricas-modal[open] { display: flex; flex-direction: column; overflow: hidden; }
+        .metricas-modal::backdrop { background: #111b2180; }
+        .metricas-modal .modal-header { flex-shrink: 0; padding: 18px 20px; border-bottom: 1px solid var(--borde); gap: 12px; }
+        .metricas-modal .modal-body { flex: 1; min-height: 0; padding: 20px; overflow-y: auto; }
+        .metricas-modal .modal-footer { flex-shrink: 0; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--borde); }
+        #modal-prompts { width: min(940px, calc(100% - 24px)); }
+        #modal-descartar-prompts { width: min(460px, calc(100% - 24px)); }
+        #prompt-contenido { min-height: 300px; height: 40dvh; resize: vertical; font-size: 14px; line-height: 1.55; }
+        .regla-promocion { margin-top: 16px; padding: 16px; border: 1px solid var(--borde); border-radius: 8px; background: var(--superficie); }
+        .regla-promocion label { display: block; margin-top: 8px; font-size: 13px; }
+        .regla-promocion .filtros { display: flex; flex-wrap: wrap; gap: 12px; }
+        .regla-promocion .filtros label { flex: 1; min-width: 140px; }
+        .origen-promocion { color: #245898; background: #e8f1ff; }
+        #origen-conversacion { display: block; margin-top: 6px; font-size: 12px; color: #245898; }
 
         .buscador { padding: 16px; border-bottom: 1px solid var(--borde); }
         .buscador .input-group { min-height: 40px; }
@@ -104,6 +120,13 @@
         .buscador .form-control { background: var(--superficie); border: 0; }
         .buscador .input-group-text { color: var(--secundario); padding-left: 14px; }
         .buscador .form-control { min-height: 40px; font-size: 13px; }
+        .orden-conversaciones { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid var(--borde); }
+        .orden-conversaciones .btn { flex: 1; min-width: 0; white-space: normal; padding: 8px 6px; font-size: 12px; }
+        .orden-conversaciones .btn[aria-pressed="true"] { background: var(--verde); color: #fff; border-color: var(--verde); }
+        .conversacion.requiere-vendedor { animation: atencion-vendedor 1.5s ease-in-out infinite; }
+        @keyframes atencion-vendedor { 0%, 100% { background-color: #fff1d7; box-shadow: inset 4px 0 #c57b18; } 50% { background-color: #fff; box-shadow: inset 4px 0 #efbb67; } }
+        @media (prefers-reduced-motion: reduce) { .conversacion.requiere-vendedor { animation: none; background: #fff1d7; box-shadow: inset 4px 0 #c57b18; } }
+        .estado-envio-error { color: #a54239; font-weight: 600; }
 
         .lista-conversaciones { flex: 1; overflow-y: auto; }
         .conversacion {
@@ -125,7 +148,7 @@
         .estado-mensaje .separador { color: #b0bec5; }
         .estado-leido { color: #1687a7; }
         .tags-conversacion { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
-        .tag { border-radius: 5px; padding: 5px 8px; font-size: 11px; font-weight: 500; }
+        .tag { border-radius: 5px; padding: 5px 8px; font-size: 11px; font-weight: 500; max-width: 100%; white-space: normal; text-align: left; }
         .lead-cold { background: #eaf2fb; color: #35659a; }
         .lead-warm { background: #fff1d7; color: #855711; }
         .lead-hot { background: #fce6e4; color: #a54239; }
@@ -219,6 +242,7 @@
     <main id="vista-conversaciones" class="vista-conversaciones" aria-label="Conversaciones">
         <header class="barra-panel">
             <h1 class="titulo-panel">WhatsApp</h1>
+            <button id="btn-prompts" type="button" class="btn btn-outline-secondary">Prompts y promociones</button>
             <button id="btn-metricas" type="button" class="btn btn-outline-secondary"><i class="fa-solid fa-chart-simple me-1" aria-hidden="true"></i> Métricas del mes</button>
             <button id="btn-cerrar-sesion" type="button" class="btn btn-outline-secondary"><i class="fa-solid fa-right-from-bracket me-1" aria-hidden="true"></i> Cerrar sesión</button>
         </header>
@@ -231,6 +255,10 @@
                 </div>
             </div>
 
+            <nav class="orden-conversaciones" aria-label="Vista del listado">
+                <button id="btn-orden-ultimas" type="button" class="btn btn-outline-secondary" aria-pressed="true">Últimas</button>
+                <button id="btn-orden-pendientes" type="button" class="btn btn-outline-secondary" aria-pressed="false">Sin responder</button>
+            </nav>
             <div id="lista-conversaciones" class="lista-conversaciones"></div>
         </aside>
 
@@ -238,12 +266,13 @@
             <header class="cabecera-conversacion">
                 <span id="nombre-conversacion" class="nombre-contacto">Seleccioná una conversación</span>
                 <span id="telefono-conversacion" class="telefono-contacto"></span>
+                <span id="origen-conversacion" hidden></span>
                 <div class="control-bot">
                     <div class="form-check form-switch">
                         <input id="bot-activo" class="form-check-input" type="checkbox" role="switch" disabled>
                         <label id="estado-bot" class="form-check-label" for="bot-activo">Bot inactivo</label>
                     </div>
-                    <small>Estado guardado por conversación. Respuestas automáticas pendientes de integración.</small>
+                    <small id="bot-detalle">Al activarlo, el bot responderá a los próximos mensajes.</small>
                 </div>
             </header>
 
@@ -251,18 +280,16 @@
 
             <div class="compositor">
                 <label for="texto-mensaje" class="visually-hidden">Escribir un mensaje</label>
-                <textarea id="texto-mensaje" class="form-control" rows="1" placeholder="Escribí un mensaje" disabled></textarea>
+                <textarea id="texto-mensaje" class="form-control" rows="1" maxlength="4096" placeholder="Escribí un mensaje" disabled></textarea>
                 <button id="btn-enviar-mensaje" type="button" class="btn btn-enviar" disabled>Enviar <i class="fa-solid fa-paper-plane ms-1" aria-hidden="true"></i></button>
             </div>
         </section>
     </main>
 
-    <div class="modal fade" id="modal-metricas" tabindex="-1" aria-labelledby="titulo-metricas" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
-            <div class="modal-content">
+    <dialog class="metricas-modal" id="modal-metricas" aria-labelledby="titulo-metricas">
                 <div class="modal-header">
                     <div><h2 class="modal-title fs-5" id="titulo-metricas">Métricas del mes</h2><p id="periodo-metricas" class="text-secondary small mb-0"></p></div>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar métricas"></button>
+                    <button type="button" class="btn-close" data-cerrar-metricas aria-label="Cerrar métricas"></button>
                 </div>
                 <div class="modal-body" aria-live="polite">
                     <p id="metricas-estado" role="status">Cargando métricas…</p>
@@ -279,15 +306,47 @@
                         <p class="metricas-nota">Todas las conversaciones · Mes en UTC. Las llamadas excluyen solicitudes rechazadas. Audio e imágenes cuentan procesamientos completados. Los tokens incluyen el consumo informado en errores. Las llamadas de texto excluyen búsquedas web y Decisions.</p>
                     </div>
                 </div>
-                <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button></div>
-            </div>
+                <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-cerrar-metricas>Cerrar</button></div>
+    </dialog>
+
+    <dialog class="metricas-modal" id="modal-prompts" aria-labelledby="titulo-prompts">
+        <div class="modal-header">
+            <h2 class="modal-title fs-5" id="titulo-prompts">Prompts y promociones</h2>
+            <button type="button" class="btn-close" data-cerrar-prompts aria-label="Cerrar editor"></button>
         </div>
-    </div>
+        <div class="modal-body">
+            <label class="form-label" for="prompt-selector">Qué querés configurar</label>
+            <select class="form-select mb-3" id="prompt-selector" disabled></select>
+            <p id="prompt-descripcion" class="small text-secondary"></p>
+            <label for="prompt-contenido" id="prompt-etiqueta" class="form-label">Contenido del prompt</label>
+            <textarea id="prompt-contenido" class="form-control" spellcheck="false" maxlength="16000" disabled></textarea>
+            <div id="editor-promociones" hidden>
+                <p class="small">Se busca una de estas frases en el primer mensaje, sin distinguir mayúsculas ni tildes. Si coinciden varias, se elige la más específica. Una coincidencia por texto indica un origen probable; la referencia de un anuncio enviada por Meta se identifica aparte.</p>
+                <div id="reglas-promociones"></div>
+                <button id="btn-agregar-promocion" type="button" class="btn btn-outline-secondary mt-3">Agregar promoción</button>
+            </div>
+            <p id="prompt-estado" class="small mt-3 mb-0" role="status" aria-live="polite"></p>
+            <p class="small text-secondary mt-2 mb-0">Los cambios guardados se usan en los próximos mensajes. Completá los datos del comercio antes de activar el bot.</p>
+        </div>
+        <div class="modal-footer">
+            <button id="btn-recargar-prompts" type="button" class="btn btn-outline-secondary">Volver a cargar</button>
+            <button type="button" class="btn btn-outline-secondary" data-cerrar-prompts>Cerrar</button>
+            <button id="btn-guardar-prompt" type="button" class="btn btn-enviar" disabled>Guardar cambios</button>
+        </div>
+    </dialog>
+
+    <dialog class="metricas-modal" id="modal-descartar-prompts" aria-labelledby="titulo-descartar-prompts">
+        <div class="modal-header"><h2 class="modal-title fs-5" id="titulo-descartar-prompts">Cambios sin guardar</h2></div>
+        <div class="modal-body"><p>¿Querés descartar los cambios del editor?</p></div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" id="btn-conservar-prompt">Seguir editando</button>
+            <button type="button" class="btn btn-danger" id="btn-descartar-prompt">Descartar cambios</button>
+        </div>
+    </dialog>
 
     <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/index.js"></script>
+    <script src="/index.js?v=prompts-vendedor-4"></script>
 </body>
 </html>

@@ -19,9 +19,23 @@ function preparar(t, servicios = {}) {
             findOne: ({ telefono }) => ({ sort: async () => conversaciones.find(item => item.telefono === telefono) }),
             findById: async id => conversaciones.find(item => String(item._id) === String(id)),
             create: datos => persistir(new Conversacion(datos), conversaciones),
+            updateOne: async ({ _id }, update) => {
+                const doc = conversaciones.find(item => String(item._id) === String(_id));
+                for (const [campo, valor] of Object.entries(update.$inc || {})) doc.set(campo, (doc.get(campo) || 0) + valor);
+                for (const [campo, valor] of Object.entries(update.$set || {})) doc.set(campo, valor);
+            },
+            findOneAndUpdate: async (query, update) => {
+                const doc = conversaciones.find(item => String(item._id) === String(query._id));
+                if (query.$or && doc.ultimoMensaje?.fechaEmitida && new Date(doc.ultimoMensaje.fechaEmitida) > query.$or[1]['ultimoMensaje.fechaEmitida'].$lte) return null;
+                for (const [campo, valor] of Object.entries(update.$set)) doc.set(campo, valor);
+                for (const [campo, valor] of Object.entries(update.$inc || {})) doc.set(campo, (doc.get(campo) || 0) + valor);
+                return doc;
+            },
         },
         '../models/mensaje': {
-            findOne: async ({ whatsappId }) => mensajes.find(item => item.whatsappId === whatsappId),
+            findOne: query => query.whatsappId ? Promise.resolve(mensajes.find(item => item.whatsappId === query.whatsappId))
+                : query.solicitudEnvioId ? Promise.resolve(mensajes.find(item => item.solicitudEnvioId === query.solicitudEnvioId))
+                    : { sort: async () => [...mensajes].reverse().find(item => String(item.conversacionId) === String(query.conversacionId) && item.deClienteParaSistema) },
             create: datos => persistir(new Mensaje(datos), mensajes),
         },
         './sockets': { notificarCambios: async (conversacion, mensaje) => {
@@ -37,6 +51,9 @@ function preparar(t, servicios = {}) {
         } },
         './openai': servicios.openai || { procesarImagen: async () => assert.fail('El texto no consume OpenAI'),
             transcribirAudio: async () => assert.fail('El texto no consume OpenAI') },
+        './promociones': { registrar: async () => {} },
+        './bot': { responder: async mensaje => { assert.equal(mensaje.estadoBot, 'omitido'); } },
+        './prompts': { cargar: async () => ({ imagen: 'Describí con incertidumbre.', audio: 'Transcribí motos.' }) },
     };
     const filename = path.resolve(__dirname, '../services/orquestador.js');
     const modulo = new Module(filename);
@@ -72,7 +89,7 @@ test('la recepción crea o reutiliza conversación, persiste texto y lo muestra 
     assert.equal(conversaciones.length, 1);
     assert.equal(mensajes.length, 2);
     assert.equal(conversaciones[0].ultimoMensaje.contenido, 'Otro mensaje');
-    assert.equal(api.recibirMensajeVendedor, undefined);
+    assert.equal(typeof api.recibirMensajeVendedor, 'function');
 });
 
 test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de conversación', async t => {
@@ -93,6 +110,7 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
     assert.match(llamadas[0][0], /^data:image\/jpeg;base64,/);
     assert.equal(llamadas[0][1], 'Identificá esta moto');
     assert.equal(llamadas[0][2].conversacionId.toString(), imagen.conversacion._id.toString());
+    assert.equal(llamadas[0][2].instrucciones, 'Describí con incertidumbre.');
     assert.equal(imagen.mensaje.transcripcionImagen, 'Una Honda Navi');
     assert.equal(imagen.mensaje.contenido, 'Identificá esta moto\nUna Honda Navi');
     assert.equal(imagen.mensaje.contenidoOriginal, 'Identificá esta moto');
@@ -103,6 +121,7 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
     await api.recibirMensajeWhatsapp(telefono, '', undefined, { id: 'audio' }, { whatsappId: 'wamid.audio', phoneNumberId: 'numero-1' });
     assert.deepEqual(llamadas[1][0], Buffer.from('audio'));
     assert.equal(llamadas[1][1], 'audio/ogg');
+    assert.equal(llamadas[1][2].prompt, 'Transcribí motos.');
     assert.equal(mensajes[1].esAudio, true);
     assert.equal(mensajes[1].transcripcionAudio, 'Quiero comprarla');
     assert.equal(mensajes[1].contenido, 'Quiero comprarla');
@@ -181,4 +200,55 @@ test('un archivo no descargable conserva el mensaje sin consumir OpenAI', async 
     assert.equal(mensajes[0].estadoProcesamiento, 'fallido');
     assert.equal(mensajes[0].usoLLM, false);
     assert.equal(conversaciones[0].ultimoMensaje.errorProcesamiento, 'Archivo vencido');
+});
+
+test('una respuesta manual se integra mientras una imagen está en proceso y no queda reemplazada al terminar', async t => {
+    let liberarImagen, imagenEnProceso;
+    const inicio = new Promise(resolve => { imagenEnProceso = resolve; });
+    const analisis = new Promise(resolve => { liberarImagen = resolve; });
+    let envios = 0;
+    const { api, conversaciones, mensajes } = preparar(t, {
+        whatsapp: {
+            descargarMedia: async () => ({ buffer: Buffer.from('imagen'), mimeType: 'image/jpeg' }),
+            enviarMensaje: async datos => { envios++; assert.equal(datos.phoneNumberId, 'numero-test'); return { messages: [{ id: 'wamid.vendedor' }] }; },
+        },
+        openai: { procesarImagen: async () => { imagenEnProceso(); await analisis; return { resultado: 'Una moto', tokensGastados: { total: 5 } }; } },
+    });
+    const recepcion = api.recibirMensajeWhatsapp('5491112345678', 'Quiero esta', { id: 'imagen' }, undefined,
+        { whatsappId: 'wamid.imagen', phoneNumberId: 'numero-test', receptor: '5491198765432', fechaEmitida: new Date('2026-01-01') });
+    await inicio;
+    conversaciones[0].requiereAtencion = true;
+    const solicitudId = '11111111-1111-4111-8111-111111111111';
+    const enviada = await api.recibirMensajeVendedor(String(conversaciones[0]._id), 'Hola, soy el vendedor.', { solicitudId });
+    assert.equal(enviada.estadoEnvio, 'enviado');
+    assert.equal(enviada.respuestaAutomatica, false);
+    assert.equal(conversaciones[0].requiereAtencion, false);
+    liberarImagen();
+    await recepcion;
+    assert.equal(conversaciones[0].ultimoMensaje.whatsappId, 'wamid.vendedor');
+    assert.equal(conversaciones[0].tokens.total, 5);
+    assert.equal(mensajes.length, 2);
+    await api.recibirMensajeVendedor(String(conversaciones[0]._id), 'Hola, soy el vendedor.', { solicitudId });
+    assert.equal(envios, 1);
+});
+
+test('los fallos manuales se muestran como no enviados y un envío incierto no se repite', async t => {
+    let envios = 0;
+    const { api, conversaciones, mensajes } = preparar(t, { whatsapp: { enviarMensaje: async () => {
+        envios++; throw envios === 1 ? Object.assign(new Error('Fuera de la ventana de atención'), { status: 400 }) : new Error('Tiempo agotado');
+    } } });
+    await api.recibirMensajeWhatsapp('5491112345678', 'Hola', undefined, undefined, { whatsappId: 'wamid.in' });
+    const id = String(conversaciones[0]._id);
+    const fallida = await api.recibirMensajeVendedor(id, 'Respuesta', { solicitudId: '11111111-1111-4111-8111-111111111111' });
+    assert.equal(fallida.estadoEnvio, 'fallido');
+    assert.equal(fallida.whatsappId, undefined);
+    assert.equal(conversaciones[0].ultimoMensaje.whatsappId, 'wamid.in');
+    assert.equal(conversaciones[0].requiereAtencion, true);
+    const datos = { solicitudId: '22222222-2222-4222-8222-222222222222' };
+    const incierta = await api.recibirMensajeVendedor(id, 'Respuesta', datos);
+    assert.equal(incierta.estadoEnvio, 'envio_incierto');
+    await api.recibirMensajeVendedor(id, 'Respuesta', datos);
+    assert.equal(envios, 2);
+    assert.equal(mensajes.length, 3);
+    await assert.rejects(api.recibirMensajeVendedor(id, 'Otro texto', datos), /identificador/);
 });

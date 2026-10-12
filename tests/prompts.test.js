@@ -1,0 +1,35 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+const { Module, createRequire } = require('node:module');
+
+test('el editor persiste archivos, usa los cambios al cargar y rechaza conflictos y rutas ajenas', async t => {
+    const temporal = await fs.mkdtemp(path.join(os.tmpdir(), 'whatsapp-prompts-test-'));
+    assert.equal(path.dirname(temporal), path.resolve(os.tmpdir()));
+    t.after(() => fs.rm(temporal, { recursive: true, force: true }));
+    await fs.cp(path.resolve(__dirname, '../prompts'), path.join(temporal, 'prompts'), { recursive: true });
+    const origen = path.resolve(__dirname, '../services/prompts.js');
+    const filename = path.join(temporal, 'services/prompts.js');
+    const modulo = new Module(filename);
+    modulo.require = createRequire(origen);
+    modulo._compile(await fs.readFile(origen, 'utf8'), filename);
+    const api = modulo.exports;
+    const lista = await api.listar();
+    assert.equal(lista.length, 8);
+    assert.equal(lista.some(item => item.id === 'promociones'), true);
+    const respuesta = await api.leer('respuesta');
+    const actualizado = await api.guardar('respuesta', 'Nueva regla para responder.', respuesta.version);
+    assert.notEqual(actualizado.version, respuesta.version);
+    assert.equal((await api.cargar()).respuesta, 'Nueva regla para responder.');
+    await assert.rejects(api.guardar('respuesta', 'Otra regla', respuesta.version), { status: 409 });
+    await assert.rejects(api.guardar('../.env', 'dato', actualizado.version), { status: 404 });
+    await assert.rejects(api.guardar('respuesta', '', actualizado.version), { status: 400 });
+    const promociones = await api.leer('promociones');
+    await assert.rejects(api.guardar('promociones', 'mal JSON', promociones.version), { status: 400 });
+    await api.guardar('promociones', '{"promociones":[]}', promociones.version);
+    assert.equal((await api.cargar()).promociones, '{"promociones":[]}');
+    const actuales = await api.listar();
+    assert.equal(actuales.some(item => item.archivo.includes('..')), false);
+});

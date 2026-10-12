@@ -129,7 +129,7 @@ test('el webhook confirma antes de procesar, deriva todos los mensajes y omite e
     assert.equal(llamadas[0][4].crudo, mensaje);
     assert.deepEqual(llamadas[1].slice(0, 4), ['5491112345678', '¿Qué moto es?', imagen, undefined]);
     assert.deepEqual(llamadas[2].slice(0, 4), ['5491112345678', '', undefined, audio]);
-    assert.equal(logs.filter(args => args[0] === 'Mensaje entrante de WhatsApp:').length, 4);
+    assert.equal(logs.filter(args => args[0] === 'Mensaje entrante de WhatsApp:').length, 0);
 });
 
 test('el webhook responde a firmas inválidas y captura fallos sin omitir el siguiente mensaje', async t => {

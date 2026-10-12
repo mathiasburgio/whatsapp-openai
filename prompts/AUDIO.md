@@ -1,0 +1,1 @@
+Transcripción en español de una conversación sobre motocicletas en Argentina. Pueden mencionarse Honda Navi, Honda Wave, Bajaj Rouser, Yamaha FZ, Yamaha YBR, Motomel S2 y Corven Energy. Conservá nombres, cifras, negaciones y correcciones que se escuchen. No agregues palabras ni información comercial que no estén en el audio.

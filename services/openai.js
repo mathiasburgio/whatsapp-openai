@@ -31,7 +31,11 @@ function crearCuerpo(input, configuracion) {
         cuerpo.instructions = configuracion.instrucciones;
     }
     if (configuracion.razonamiento) cuerpo.reasoning = { effort: configuracion.razonamiento };
-    if (configuracion.json) {
+    if (configuracion.esquema) {
+        const { nombre, schema } = configuracion.esquema;
+        if (typeof nombre !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(nombre) || !schema || schema.type !== 'object') throw new Error('Esquema JSON inválido.');
+        cuerpo.text = { format: { type: 'json_schema', name: nombre, schema, strict: true } };
+    } else if (configuracion.json) {
         cuerpo.text = { format: { type: 'json_object' } };
         cuerpo.instructions = `Respondé en formato JSON.\n${cuerpo.instructions || ''}`;
     }
@@ -129,10 +133,11 @@ async function consultarOpenAI(url, cuerpo, configuracion, tipo, segundos = 0, e
         if (contenidos.some(item => item.type === 'refusal')) throw new Error('OpenAI rechazó la solicitud.');
         const resultado = tipo === 'audio' ? datos.text : datos.output_text || contenidos.filter(item => item.type === 'output_text').map(item => item.text).join('\n');
         if (typeof resultado !== 'string' || !resultado.trim()) throw new Error('OpenAI no devolvió contenido.');
-        if (configuracion.json && tipo !== 'audio') JSON.parse(resultado);
+        if ((configuracion.json || configuracion.esquema) && tipo !== 'audio') JSON.parse(resultado);
         uso.estado = 'completado';
         return {
-            resultado, tokensGastados: tokens, tiempoRespuestaMs: Math.round(performance.now() - inicio),
+            resultado: configuracion.esquema && tipo !== 'audio' ? JSON.parse(resultado) : resultado,
+            tokensGastados: tokens, tiempoRespuestaMs: Math.round(performance.now() - inicio),
             fuentes: contenidos.flatMap(item => item.annotations || []).filter(item => item.type === 'url_citation').map(({ url, title }) => ({ url, titulo: title || url })),
             ...(tipo === 'audio' && { segundosAudio: segundos }),
         };
@@ -140,6 +145,7 @@ async function consultarOpenAI(url, cuerpo, configuracion, tipo, segundos = 0, e
         // Los errores de red conservan cupo: la solicitud puede haber sido procesada.
         const rechazado = !enviado || (respuesta?.status >= 400 && respuesta.status < 500 && respuesta.status !== 408 && !datos?.usage);
         uso.estado = rechazado ? 'rechazado' : datos?.status === 'incomplete' ? 'incompleto' : 'fallido';
+        error.tokensGastados = obtenerUso(datos);
         throw error;
     } finally {
         uso.tiempoRespuestaMs = Math.round(performance.now() - inicio);

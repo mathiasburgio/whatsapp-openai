@@ -41,6 +41,7 @@ test('el panel protege métricas y control de bot, valida booleanos y notifica l
     const id = '507f1f77bcf86cd799439011';
     let cambios = 0, consultas = 0, lecturaMetricas = 0;
     const conversacion = { _id: id, botActivo: false, telefono: '5491112345678' };
+    const prompt = { id: 'respuesta', contenido: 'Respondé breve.', version: 'a'.repeat(64) };
     const filename = path.resolve(__dirname, '../index.js');
     const app = cargar(filename, {
         dotenv: { config() {} },
@@ -49,12 +50,20 @@ test('el panel protege métricas y control de bot, valida booleanos y notifica l
         './services/usuarios': { iniciarSesion() {}, cerrarSesion() {} },
         './services/sockets': { inicializar() {}, notificarCambios: async actual => { cambios++; assert.equal(actual, conversacion); } },
         './services/metricas': { obtenerMetricasMensuales: async () => { lecturaMetricas++; return { llamadasWebSearch: 2, respuestasAutomaticas: 0 }; } },
+        './services/prompts': { listar: async () => [prompt], guardar: async (id, contenido, version) => {
+            if (id !== prompt.id) throw Object.assign(new Error('Prompt no encontrado.'), { status: 404 });
+            if (!contenido) throw Object.assign(new Error('Contenido inválido.'), { status: 400 });
+            if (version !== prompt.version) throw Object.assign(new Error('El prompt cambió.'), { status: 409 });
+            Object.assign(prompt, { contenido, version: 'b'.repeat(64) }); return prompt;
+        } },
         './models/usuarios': { exists: async ({ _id }) => _id === 'activo' },
         './models/conversacion': { findOneAndUpdate: async (query, update, opciones) => {
             consultas++;
             assert.equal(opciones.returnDocument, 'after');
             assert.equal(opciones.runValidators, true);
+            assert.equal(typeof update.$set.botActivo, 'boolean');
             assert.deepEqual(Object.keys(update.$set), ['botActivo']);
+            assert.deepEqual(update.$inc, { revisionBot: 1 });
             if (query._id !== id) return null;
             conversacion.botActivo = update.$set.botActivo;
             return conversacion;
@@ -74,6 +83,8 @@ test('el panel protege métricas y control de bot, valida booleanos y notifica l
     for (const usuario of [null, 'deshabilitado']) {
         assert.equal((await pedir('/metricas/mes', undefined, usuario)).status, 401);
         assert.equal((await pedir(`/conversaciones/${id}/bot`, { botActivo: true }, usuario)).status, 401);
+        assert.equal((await pedir('/prompts', undefined, usuario)).status, 401);
+        assert.equal((await pedir('/prompts/respuesta', { contenido: 'Cambio' }, usuario)).status, 401);
     }
     assert.equal(consultas, 0); assert.equal(lecturaMetricas, 0);
     for (const body of [{}, { botActivo: 'true' }, { botActivo: 1 }, { botActivo: null }]) assert.equal((await pedir(`/conversaciones/${id}/bot`, body)).status, 400);
@@ -91,4 +102,13 @@ test('el panel protege métricas y control de bot, valida booleanos y notifica l
     assert.equal(metricas.status, 200);
     assert.equal(metricas.headers.get('cache-control'), 'no-store');
     assert.deepEqual(metricas.body, { llamadasWebSearch: 2, respuestasAutomaticas: 0 });
+    const listado = await pedir('/prompts');
+    assert.equal(listado.status, 200);
+    assert.equal(listado.headers.get('cache-control'), 'no-store');
+    assert.equal(listado.body[0].contenido, 'Respondé breve.');
+    assert.equal((await pedir('/prompts/desconocido', { contenido: 'Cambio' })).status, 404);
+    assert.equal((await pedir('/prompts/respuesta', { contenido: '' })).status, 400);
+    assert.equal((await pedir('/prompts/respuesta', { contenido: 'Cambio', version: 'anterior' })).status, 409);
+    assert.equal((await pedir('/prompts/respuesta', { contenido: 'Nueva regla', version: 'a'.repeat(64) })).body.contenido, 'Nueva regla');
+    assert.equal((await pedir('/prompts')).body[0].contenido, 'Nueva regla');
 });
