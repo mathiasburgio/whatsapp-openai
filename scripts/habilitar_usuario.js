@@ -6,9 +6,7 @@ const usuarios = require('../services/usuarios');
 const Usuario = require('../models/usuarios');
 
 async function main(argumentos = process.argv.slice(2)) {
-    if (argumentos.length < 1 || argumentos.length > 2) {
-        throw new Error('Uso: npm run nuevo_usuario -- <email> [contraseña] (obligatoria para usuarios nuevos)');
-    }
+    if (argumentos.length < 1 || argumentos.length > 2)  throw new Error('Uso: npm run habilitar_usuario -- <email> [contraseña] (obligatoria para usuarios nuevos)');
     const [email, contrasena] = argumentos;
     usuarios.normalizarEmail(email);
     if (contrasena !== undefined) usuarios.validarContrasena(contrasena);

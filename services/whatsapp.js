@@ -1,5 +1,7 @@
 const crypto = require('node:crypto');
 const orquestador = require('./orquestador');
+const Mensaje = require('../models/mensaje');
+const Conversacion = require('../models/conversacion');
 
 const apiVersion = process.env.WHATSAPP_API_VERSION || 'v25.0';
 const graphApiBaseUrl = process.env.WHATSAPP_GRAPH_API_URL || 'https://graph.facebook.com';
@@ -8,9 +10,6 @@ const defaultPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const webhookVerifyToken = process.env.WEBHOOK_VERIFY_TOKEN;
 const appSecret = process.env.WHATSAPP_APP_SECRET;
 const internalApiKey = process.env.INTERNAL_API_KEY;
-
-
-
 
 //Recibo las notificaciones del webhook de WhatsApp
 async function recibirMensajeWebhook(req, res){
@@ -35,7 +34,14 @@ async function recibirMensajeWebhook(req, res){
         for (const change of entry.changes || []) {
             if (change.field !== 'messages') continue;
             const value = change.value || {};
-            // Las notificaciones de entrega/lectura no son mensajes del cliente.
+            for (const estado of value.statuses || []) {
+                try {
+                    await registrarEstado(estado);
+                } catch (error) {
+                    // La confirmación HTTP ya salió: registramos el fallo para investigar el estado perdido.
+                    console.error('No se pudo actualizar el estado del mensaje de WhatsApp:', { id: estado.id, error: error.message });
+                }
+            }
             for (const recibido of value.messages || []) {
                 const telefono = recibido.from;
                 const nombre = value.contacts?.find(contacto => contacto.wa_id === telefono)?.profile?.name;
@@ -61,7 +67,47 @@ async function recibirMensajeWebhook(req, res){
     }
 }
 
-async function descargarMedia(mediaId, { phoneNumberId = defaultPhoneNumberId, maxBytes = 15000000 } = {}) {
+//registra cuando llega un cambio de estado en el mensaje (entregado, leido, fallido) y notifica a los sockets conectados
+async function registrarEstado(estado) {
+    if (typeof estado?.id !== 'string' || !estado.id || !['delivered', 'read', 'failed'].includes(estado.status)) return false;
+    const segundos = Number(estado.timestamp);
+    const fecha = new Date(segundos * 1000);
+    if (!Number.isFinite(segundos) || segundos <= 0 || Number.isNaN(fecha.getTime())) return false;
+
+    if (estado.status === 'failed') {
+        const mensaje = await Mensaje.findOne({ whatsappId: estado.id, deSistemaParaCliente: true });
+        if (!mensaje || mensaje.fechaEntregada || mensaje.fechaLeida) return false;
+        const motivo = String(estado.errors?.[0]?.message || estado.errors?.[0]?.title || 'WhatsApp informó que no pudo entregar el mensaje.').slice(0, 900);
+        console.error('WhatsApp no pudo entregar el mensaje:', { whatsappId: estado.id, motivo });
+        const conversacion = await Conversacion.findOneAndUpdate({ _id: mensaje.conversacionId }, {
+            $set: { botActivo: false, requiereAtencion: true, motivoDerivacion: motivo },
+        }, { returnDocument: 'after' });
+        await require('./sockets').notificarCambios(conversacion, mensaje);
+        return true;
+    }
+
+    const filtro = { whatsappId: estado.id, deSistemaParaCliente: true };
+    const cambios = {};
+    if (estado.status === 'delivered') {
+        filtro.fechaEntregada = null;
+        cambios.fechaEntregada = fecha;
+    } else if (estado.status === 'read') {
+        filtro.fechaLeida = null;
+        cambios.fechaLeida = fecha;
+    }
+
+    const mensaje = await Mensaje.findOneAndUpdate(filtro, { $set: cambios }, { returnDocument: 'after' });
+    if (!mensaje) return false;
+
+    const copia = Object.fromEntries(Object.entries(cambios).map(([campo, valor]) => [`ultimoMensaje.${campo}`, valor]));
+    const conversacion = await Conversacion.findOneAndUpdate(
+        { _id: mensaje.conversacionId, 'ultimoMensaje._id': mensaje._id }, { $set: copia }, { returnDocument: 'after' })
+        || await Conversacion.findById(mensaje.conversacionId);
+    await require('./sockets').notificarCambios(conversacion, mensaje);
+    return true;
+}
+
+async function obtenerMediaDesdeWhatsapp(mediaId, { phoneNumberId = defaultPhoneNumberId, maxBytes = 15_000_000 } = {}) {
     if (typeof mediaId !== 'string' || !mediaId.trim()) throw new Error('Falta el ID del archivo de WhatsApp.');
     if (!accessToken) throw new Error('Falta definir WHATSAPP_ACCESS_TOKEN.');
     const headers = { Authorization: `Bearer ${accessToken}` };
@@ -101,6 +147,7 @@ async function configurarWebhook(req, res){
     return res.sendStatus(403);
 }
 
+// Envia un mensaje desde la API de WhatsApp. Devuelve el cuerpo de la respuesta de la API.
 async function enviarMensaje({ to, text, phoneNumberId = defaultPhoneNumberId, replyToMessageId=null }) {
     if (!accessToken || !phoneNumberId || typeof to !== 'string' || !/^\d{5,20}$/.test(to)
         || typeof text !== 'string' || !text.trim() || text.length > 4096) {
@@ -147,7 +194,8 @@ async function enviarMensaje({ to, text, phoneNumberId = defaultPhoneNumberId, r
 
 module.exports = {
     recibirMensajeWebhook,
+    registrarEstado,
     configurarWebhook,
     enviarMensaje,
-    descargarMedia,
+    obtenerMediaDesdeWhatsapp,
 };

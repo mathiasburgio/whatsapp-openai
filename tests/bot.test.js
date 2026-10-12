@@ -14,7 +14,7 @@ function preparar(t, opciones = {}) {
     t.mock.method(console, 'error', () => {});
     const conversacion = new Conversacion({ telefono: '5491112345678', botActivo: opciones.activo ?? true, resumen: 'Cliente busca una Corven.' });
     const entrada = new Mensaje({ conversacionId: conversacion._id, whatsappId: 'wamid.entrada', deClienteParaSistema: true,
-        contenidoOriginal: 'Hola', estadoProcesamiento: 'completado', estadoBot: opciones.estado ?? 'pendiente', mediaPhoneNumberId: 'numero-test' });
+        contenidoOriginal: 'Hola', estadoBot: opciones.estado ?? 'pendiente', mediaPhoneNumberId: 'numero-test' });
     entrada.save = async () => entrada;
     const mensajes = [entrada], llamadas = [], envios = [], cambios = [];
     function actualizar(update) {
@@ -33,8 +33,16 @@ function preparar(t, opciones = {}) {
                 if (!query.estadoBot.$in.includes(entrada.estadoBot)) return null;
                 Object.assign(entrada, update.$set); return entrada;
             },
-            countDocuments: async () => mensajes.filter(item => item.respuestaAutomatica).length,
             create: async datos => { const mensaje = new Mensaje(datos); await mensaje.validate(); mensajes.push(mensaje); return mensaje; },
+        },
+        './envios': {
+            serializar: require('../services/envios').serializar,
+            verificarLimiteMensual: async () => {
+                const cantidad = mensajes.filter(item => item.deSistemaParaCliente && item.whatsappId).length;
+                if (cantidad >= Number(process.env.WHATSAPP_MONTHLY_RESPONSE_LIMIT)) {
+                    throw new Error('Se alcanzó el límite mensual de respuestas de WhatsApp.');
+                }
+            },
         },
         './prompts': { cargar: async () => ({ base: 'Reglas', comercio: 'Datos', orquestador: 'Seleccionar', respuesta: 'Responder', resumen: 'Resumir' }),
             instrucciones: (config, etapa) => [config.base, config.comercio, config[etapa]].join('\n') },
@@ -45,7 +53,6 @@ function preparar(t, opciones = {}) {
             if (etapa === 'orquestador') resultado = opciones.decision || { accion: 'responder', filtro, motivo: 'Saludo' };
             if (etapa === 'respuesta') {
                 if (opciones.apagarDuranteGeneracion) conversacion.botActivo = false;
-                if (opciones.cambiarRevision) conversacion.revisionBot++;
                 resultado = { mensaje: 'Hola, ¿qué moto te interesa?' };
             }
             if (etapa === 'resumen') {
@@ -71,6 +78,7 @@ function preparar(t, opciones = {}) {
 }
 test('el bot activo selecciona, responde y registra un único envío con consumo', async t => {
     const { api, entrada, llamadas, envios, mensajes, conversacion, cambios } = preparar(t);
+    conversacion.origenPromocion = 'Venta corven';
     await Promise.all([api.responder(entrada), api.responder(entrada)]);
     assert.equal(llamadas.length, 2);
     assert.equal(envios.length, 1);
@@ -84,7 +92,9 @@ test('el bot activo selecciona, responde y registra un único envío con consumo
     assert.equal(conversacion.ultimoMensaje.whatsappId, 'wamid.salida');
     assert.match(llamadas[0].config.instrucciones, /Reglas\nDatos\nSeleccionar/);
     assert.match(llamadas[1].config.instrucciones, /Responder/);
+    assert(llamadas.every(llamada => String(llamada.config.mensajeId) === String(entrada._id)));
     assert.equal(llamadas[0].datos.resumenAnterior, 'Cliente busca una Corven.');
+    assert.equal(llamadas[0].datos.origenPromocion, 'Venta corven');
     assert.equal(cambios.some(item => item.mensaje.respuestaAutomatica), true);
     await api.responder(entrada);
     assert.equal(envios.length, 1);
@@ -104,13 +114,6 @@ test('si se apaga durante la generación, no envía y conserva el consumo', asyn
     assert.equal(entrada.estadoBot, 'omitido');
     assert.equal(envios.length, 0);
     assert.equal(entrada.tokens.total, 30);
-});
-test('una intervención o cambio del interruptor invalida la respuesta en curso aunque el bot vuelva a estar activo', async t => {
-    const { api, entrada, envios, conversacion } = preparar(t, { cambiarRevision: true });
-    await api.responder(entrada);
-    assert.equal(conversacion.botActivo, true);
-    assert.equal(entrada.estadoBot, 'omitido');
-    assert.equal(envios.length, 0);
 });
 test('sin catálogo confirma la derivación, pausa el bot y avisa en el panel', async t => {
     const { api, entrada, conversacion, llamadas, envios } = preparar(t, { decision: {
@@ -136,6 +139,15 @@ test('un envío incierto no se reintenta y el límite mensual evita el envío', 
     await limitado.api.responder(limitado.entrada);
     assert.equal(limitado.envios.length, 0);
     assert.match(limitado.entrada.errorBot, /límite mensual/);
+});
+
+test('una respuesta manual confirmada ocupa un cupo antes de la respuesta automática', async t => {
+    const { api, entrada, mensajes, envios } = preparar(t, { limite: 1 });
+    mensajes.push(new Mensaje({ deSistemaParaCliente: true, respuestaAutomatica: false,
+        whatsappId: 'wamid.manual', fechaEmitida: new Date() }));
+    await api.responder(entrada);
+    assert.equal(envios.length, 0);
+    assert.match(entrada.errorBot, /límite mensual/);
 });
 test('el resumen usa el historial y un fallo de memoria no repite una respuesta', async t => {
     const valido = preparar(t, { cada: 1 });

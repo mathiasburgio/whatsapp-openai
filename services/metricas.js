@@ -3,8 +3,10 @@ const Mensaje = require('../models/mensaje');
 
 async function obtenerMetricasMensuales(ahora = new Date()) {
     // El período coincide con el mes UTC que usan los límites de OpenAI.
-    const inicio = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1));
-    const fin = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth() + 1, 1));
+    const inicio = new Date(0);
+    inicio.setUTCFullYear(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1);
+    const fin = new Date(0);
+    fin.setUTCFullYear(ahora.getUTCFullYear(), ahora.getUTCMonth() + 1, 1);
     const [usos, respuestasAutomaticas] = await Promise.all([
         Uso.aggregate([
             { $match: { servicio: 'openai', createdAt: { $gte: inicio, $lt: fin }, estado: { $ne: 'rechazado' } } },

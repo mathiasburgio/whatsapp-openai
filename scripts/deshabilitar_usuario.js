@@ -5,9 +5,7 @@ const mongo = require('../services/mongo');
 const usuarios = require('../services/usuarios');
 
 async function main(argumentos = process.argv.slice(2)) {
-    if (argumentos.length !== 1) {
-        throw new Error('Uso: npm run deshabilitar_usuario -- <email>');
-    }
+    if (argumentos.length !== 1)  throw new Error('Uso: npm run deshabilitar_usuario -- <email>');
     const [email] = argumentos;
     usuarios.normalizarEmail(email);
 

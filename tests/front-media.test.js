@@ -6,7 +6,7 @@ const path = require('node:path');
 
 test('el panel separa el caption de las inferencias sin duplicar descripciones ni transcripciones antiguas', () => {
     const jquery = () => ({ on() {} });
-    jquery.get = async () => ({ sesionActiva: false });
+    jquery.get = async () => false;
     const contexto = vm.createContext({ $: jquery, io: () => ({ on() {} }) });
     vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/index.js'), 'utf8'), contexto);
     const original = vm.runInContext('textoOriginal', contexto);

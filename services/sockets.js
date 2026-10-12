@@ -1,6 +1,7 @@
 const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const Usuario = require('../models/usuarios');
+const orquestador = require('./orquestador');
 
 let io;
 
@@ -34,6 +35,7 @@ function inicializar(server, middlewareSesion) {
     return io;
 }
 
+//valida que el socket conectado tenga una sesion valida
 async function validarSesion(socket) {
     const req = socket.request;
     if (!req.session?.usuarioId) return false;
@@ -43,6 +45,7 @@ async function validarSesion(socket) {
     return !!await Usuario.exists({ _id: req.session.usuarioId, habilitado: true });
 }
 
+//cuando llega un whatsapp pasa por esto
 async function recibirMensaje(socket, datos, responder) {
     if (typeof responder !== 'function') responder = () => {};
     try {
@@ -51,22 +54,20 @@ async function recibirMensaje(socket, datos, responder) {
             socket.disconnect(true);
             return;
         }
-        const { conversacionId, contenido, solicitudId } = datos || {};
-        if (!mongoose.isObjectIdOrHexString(conversacionId) || typeof contenido !== 'string' || !contenido.trim() || contenido.trim().length > 4096
-            || typeof solicitudId !== 'string' || !/^[a-f0-9-]{36}$/i.test(solicitudId)) {
+        const { conversacionId, contenido } = datos || {};
+        if (!mongoose.isObjectIdOrHexString(conversacionId) || typeof contenido !== 'string' || !contenido.trim() || contenido.trim().length > 4096) {
             return responder({ error: 'Indicá una conversación válida y un mensaje.' });
         }
-        const orquestador = require('./orquestador');
-        const mensaje = await orquestador.recibirMensajeVendedor(conversacionId, contenido.trim(), { solicitudId, usuarioId: socket.request.session.usuarioId });
-        responder({ mensaje, ...(mensaje.estadoEnvio && mensaje.estadoEnvio !== 'enviado' && { error: mensaje.estadoEnvio === 'fallido'
-            ? 'WhatsApp rechazó el envío. Revisá el mensaje y la configuración antes de volver a enviar.'
-            : 'El envío sigue pendiente o no pudo confirmarse. Revisá la conversación antes de volver a enviarlo.' }) });
+
+        const mensaje = await orquestador.responderMensajePorApiWhataspp(conversacionId, contenido.trim(), { usuarioId: socket.request.session.usuarioId });
+        responder({ mensaje });
     } catch (error) {
         console.error(error);
-        responder({ error: 'No se pudo enviar el mensaje.' });
+        responder({ error: error.message.includes('límite mensual') ? error.message : 'No se pudo confirmar el envío. Revisá la conversación antes de volver a intentarlo.' });
     }
 }
 
+//hace broadcast de los cambios de una conversacion y/o mensaje a todos los sockets conectados
 async function notificarCambios(conversacion, mensaje) {
     if (!io) return;
     for (const socket of io.sockets.sockets.values()) {

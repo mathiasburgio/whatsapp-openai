@@ -21,7 +21,7 @@ function crearConfiguracion(opciones = {}) {
 
 function validarTexto(texto) {
     if (typeof texto !== 'string' || !texto.trim()) throw new Error('El texto no puede estar vacío.');
-    if (texto.length > 30000) throw new Error('El texto no puede superar los 30000 caracteres.');
+    if (texto.length > 30_000) throw new Error('El texto no puede superar los 30_000 caracteres.');
 }
 
 function crearCuerpo(input, configuracion) {
@@ -51,7 +51,7 @@ function obtenerUso(datos) {
 
 // Comprobar y registrar juntos evita que llamadas simultáneas del servidor excedan el cupo.
 // Esta cola es local: si se ejecutan varios procesos, el control debe hacerse en MongoDB.
-function registrarUso(tipo, modelo, segundos, configuracion, signal, entrada) {
+function registrarUso(tipo, modelo, segundos, configuracion, signal) {
     const registro = registroPendiente.then(async () => {
         if (Uso.db.readyState !== 1) throw new Error('MongoDB debe estar conectado para registrar el uso de OpenAI.');
         const ahora = new Date();
@@ -76,12 +76,12 @@ function registrarUso(tipo, modelo, segundos, configuracion, signal, entrada) {
         if (tipo === 'audio' && consumo.segundos + segundos > limiteAudio) throw new Error('Se alcanzó el límite mensual de segundos de audio.');
         signal.throwIfAborted();
         return Uso.create({
-            ...entrada,
             servicio: 'openai', modelo, estado: 'pendiente', segundos,
             esTexto: tipo === 'texto' || tipo === 'web' || tipo === 'decision', esImagen: tipo === 'imagen',
             esBusquedaWeb: tipo === 'web', esAudio: tipo === 'audio',
             esDecision: tipo === 'decision',
             conversacionId: configuracion.conversacionId,
+            mensajeId: configuracion.mensajeId,
         });
     });
     registroPendiente = registro.catch(() => {});
@@ -89,13 +89,13 @@ function registrarUso(tipo, modelo, segundos, configuracion, signal, entrada) {
 }
 
 // Todas las APIs pasan por acá: límite, llamada y guardado del uso.
-async function consultarOpenAI(url, cuerpo, configuracion, tipo, segundos = 0, entrada = {}) {
+async function consultarOpenAI(url, cuerpo, configuracion, tipo, segundos = 0) {
     if (!process.env.OPENAI_API_KEY?.trim()) throw new Error('Falta definir OPENAI_API_KEY.');
     const signal = configuracion.signal
         ? AbortSignal.any([configuracion.signal, AbortSignal.timeout(90000)])
         : AbortSignal.timeout(90000);
     signal.throwIfAborted();
-    const uso = await registrarUso(tipo, cuerpo.model || configuracion.modelo, segundos, configuracion, signal, entrada);
+    const uso = await registrarUso(tipo, cuerpo.model || configuracion.modelo, segundos, configuracion, signal);
     const inicio = performance.now();
     let respuesta, datos, enviado = false;
     try {
@@ -111,11 +111,9 @@ async function consultarOpenAI(url, cuerpo, configuracion, tipo, segundos = 0, e
         uso.tokensEntrada = tokens.entrada;
         uso.tokensSalida = tokens.salida;
         uso.tokensTotal = tokens.total;
-        if (tipo === 'decision') uso.usoDetalle = datos.usage;
         if (!respuesta.ok) throw new Error(datos.error?.message || 'No fue posible consultar OpenAI.');
         if (datos.status === 'incomplete' || datos.status === 'failed' || datos.error) throw new Error('OpenAI no pudo completar la respuesta.');
         if (tipo === 'decision') {
-            uso.respuestasDecision = datos.answers;
             const resultado = datos.answers?.[0];
             if (!Array.isArray(datos.answers) || datos.answers.length !== 1 || !['choice', 'refusal'].includes(resultado?.type)) {
                 throw new Error('OpenAI no devolvió una decisión válida.');
@@ -156,9 +154,7 @@ async function consultarOpenAI(url, cuerpo, configuracion, tipo, segundos = 0, e
 async function procesarTexto(texto, opciones = {}) {
     validarTexto(texto);
     const configuracion = crearConfiguracion(opciones);
-    return consultarOpenAI(RESPONSES_API_URL, crearCuerpo(texto, configuracion), configuracion, 'texto', 0, {
-        texto, contexto: configuracion.instrucciones,
-    });
+    return consultarOpenAI(RESPONSES_API_URL, crearCuerpo(texto, configuracion), configuracion, 'texto');
 }
 
 async function procesarDecision(prompt, opciones, configuracion = {}) {
@@ -194,9 +190,7 @@ async function procesarDecision(prompt, opciones, configuracion = {}) {
         if (configuracion.safetyIdentifier.length > 128) throw new Error('safetyIdentifier no puede superar los 128 caracteres.');
         cuerpo.safety_identifier = configuracion.safetyIdentifier;
     }
-    return consultarOpenAI(DECISIONS_API_URL, cuerpo, { ...configuracion, modelo }, 'decision', 0, {
-        texto: prompt, contexto: instrucciones, preguntasDecision: cuerpo.questions,
-    });
+    return consultarOpenAI(DECISIONS_API_URL, cuerpo, { ...configuracion, modelo }, 'decision');
 }
 
 async function procesarImagen(imagenUrl, prompt = 'Describí esta imagen.', opciones = {}) {
@@ -204,13 +198,10 @@ async function procesarImagen(imagenUrl, prompt = 'Describí esta imagen.', opci
     if (typeof imagenUrl !== 'string' || !/^(https?:\/\/|data:image\/)/.test(imagenUrl)) throw new Error('Indicá una URL HTTP(S) o una imagen en base64.');
     const configuracion = crearConfiguracion(opciones);
     const input = [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: imagenUrl }] }];
-    return consultarOpenAI(RESPONSES_API_URL, crearCuerpo(input, configuracion), configuracion, 'imagen', 0, {
-        imagenUrl, contexto: [configuracion.instrucciones, prompt].filter(Boolean).join('\n'),
-    });
+    return consultarOpenAI(RESPONSES_API_URL, crearCuerpo(input, configuracion), configuracion, 'imagen');
 }
 
 async function transcribirAudio(buffer, mimeType = 'audio/webm', opciones = {}) {
-    // El audio se guarda en el documento de Uso; 15 MB deja margen bajo el límite de MongoDB.
     if (!Buffer.isBuffer(buffer) || !buffer.length || buffer.length > 15000000) throw new Error('El audio debe ser un Buffer de hasta 15 MB.');
     const tipo = mimeType.split(';')[0].trim().toLowerCase();
     const extensiones = { 'audio/webm': 'webm', 'audio/mp4': 'mp4', 'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/flac': 'flac', 'audio/x-m4a': 'm4a' };
@@ -230,16 +221,7 @@ async function transcribirAudio(buffer, mimeType = 'audio/webm', opciones = {}) 
     cuerpo.append('language', 'es');
     cuerpo.append('response_format', 'json');
     cuerpo.append('prompt', contexto);
-    return consultarOpenAI(TRANSCRIPTIONS_API_URL, cuerpo, configuracion, 'audio', segundosAudio, {
-        audio: buffer, audioMimeType: tipo, contexto,
-    });
-}
-
-async function procesarAudio(audioBase64, formato = 'webm', prompt = 'Transcribí este audio.', opciones = {}) {
-    if (typeof audioBase64 !== 'string' || !audioBase64.length || audioBase64.length > 33333336 || audioBase64.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(audioBase64)) throw new Error('Audio en base64 inválido.');
-    const tipos = { webm: 'audio/webm', mp4: 'audio/mp4', m4a: 'audio/x-m4a', mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac' };
-    if (!tipos[formato]) throw new Error('Formato de audio no compatible.');
-    return transcribirAudio(Buffer.from(audioBase64, 'base64'), tipos[formato], { ...opciones, prompt });
+    return consultarOpenAI(TRANSCRIPTIONS_API_URL, cuerpo, configuracion, 'audio', segundosAudio);
 }
 
 async function procesarBusquedaWeb(consulta, opciones = {}) {
@@ -249,9 +231,7 @@ async function procesarBusquedaWeb(consulta, opciones = {}) {
     cuerpo.tools = [{ type: 'web_search' }];
     cuerpo.tool_choice = 'required';
     cuerpo.max_tool_calls = 1;
-    return consultarOpenAI(RESPONSES_API_URL, cuerpo, configuracion, 'web', 0, {
-        busqueda: consulta, contexto: configuracion.instrucciones,
-    });
+    return consultarOpenAI(RESPONSES_API_URL, cuerpo, configuracion, 'web');
 }
 
-module.exports = { procesarTexto, procesarImagen, procesarAudio, transcribirAudio, procesarBusquedaWeb, procesarDecision };
+module.exports = { procesarTexto, procesarImagen, transcribirAudio, procesarBusquedaWeb, procesarDecision };

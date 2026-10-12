@@ -77,7 +77,7 @@ test('las rutas HTTP del webhook verifican GET y reciben POST firmado sin login'
     assert.equal(recibidos.length, 1);
 });
 
-function prepararWhatsapp(t, orquestador = {}) {
+function prepararWhatsapp(t, orquestador = {}, modeloMensaje = { findOneAndUpdate: async () => null }) {
     const nombres = ['WHATSAPP_APP_SECRET', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_GRAPH_API_URL'];
     const originales = nombres.map(nombre => [nombre, process.env[nombre]]);
     t.after(() => {
@@ -92,7 +92,9 @@ function prepararWhatsapp(t, orquestador = {}) {
     const logs = [], errores = [];
     t.mock.method(console, 'log', (...args) => logs.push(args));
     t.mock.method(console, 'error', (...args) => errores.push(args));
-    return { api: cargar(path.resolve(__dirname, '../services/whatsapp.js'), { './orquestador': orquestador }), logs, errores };
+    return { api: cargar(path.resolve(__dirname, '../services/whatsapp.js'), {
+        './orquestador': orquestador, '../models/mensaje': modeloMensaje,
+    }), logs, errores };
 }
 
 function solicitud(cuerpo) {
@@ -101,11 +103,15 @@ function solicitud(cuerpo) {
     return { body: cuerpo, rawBody, get: () => firma };
 }
 
-test('el webhook confirma antes de procesar, deriva todos los mensajes y omite estados', async t => {
-    const llamadas = [], estados = [];
+test('el webhook confirma antes de procesar y deriva mensajes y estados por separado', async t => {
+    const llamadas = [], estados = [], notificaciones = [];
     const { api, logs } = prepararWhatsapp(t, { recibirMensajeWhatsapp: async (...args) => {
         assert.deepEqual(estados, [200]);
         llamadas.push(args);
+    } }, { findOneAndUpdate: async filtro => {
+        assert.deepEqual(estados, [200]);
+        notificaciones.push(filtro.whatsappId);
+        return null;
     } });
     const imagen = { id: 'imagen-1', mime_type: 'image/jpeg', caption: '¿Qué moto es?' };
     const audio = { id: 'audio-1', mime_type: 'audio/ogg; codecs=opus' };
@@ -115,12 +121,13 @@ test('el webhook confirma antes de procesar, deriva todos los mensajes y omite e
             contacts: [{ wa_id: mensaje.from, profile: { name: 'Cliente' } }],
             messages: [mensaje, { ...mensaje, id: 'wamid.2', type: 'image', image: imagen },
                 { ...mensaje, id: 'wamid.3', type: 'audio', audio }] } },
-        { field: 'messages', value: { statuses: [{ id: 'wamid.1', status: 'delivered' }] } },
+        { field: 'messages', value: { statuses: [{ id: 'wamid.1', status: 'delivered', timestamp: '1700000001' }] } },
         { field: 'otro', value: { messages: [mensaje] } },
     ] }, { changes: [{ field: 'messages', value: { messages: [{ ...mensaje, id: 'wamid.4' }] } }] }] }), {
         sendStatus: estado => estados.push(estado),
     });
     assert.equal(llamadas.length, 4);
+    assert.deepEqual(notificaciones, ['wamid.1']);
     assert.deepEqual(llamadas[0].slice(0, 4), ['5491112345678', 'Hola', undefined, undefined]);
     assert.equal(llamadas[0][4].nombre, 'Cliente');
     assert.equal(llamadas[0][4].receptor, '5491198765432');
@@ -169,19 +176,19 @@ test('la descarga obtiene la URL de Meta, autentica ambos pasos y limita el tama
             ? new Response(JSON.stringify({ url: 'https://media.example.com/archivo', mime_type: 'audio/ogg; codecs=opus', file_size: 3 }))
             : new Response(Buffer.from('abc'));
     });
-    const archivo = await api.descargarMedia('media-1', { phoneNumberId: 'numero-1', maxBytes: 3 });
+    const archivo = await api.obtenerMediaDesdeWhatsapp('media-1', { phoneNumberId: 'numero-1', maxBytes: 3 });
     assert.equal(new URL(llamadas[0].url).searchParams.get('phone_number_id'), 'numero-1');
     assert.match(new URL(llamadas[0].url).pathname, /\/media-1$/);
     assert.equal(llamadas[1].url, 'https://media.example.com/archivo');
     assert(llamadas.every(llamada => llamada.opciones.headers.Authorization === 'Bearer token-meta-de-prueba'));
     assert.deepEqual(archivo, { buffer: Buffer.from('abc'), mimeType: 'audio/ogg' });
     llamadas.length = 0;
-    await assert.rejects(api.descargarMedia('media-1', { maxBytes: 2 }), /tamaño/);
+    await assert.rejects(api.obtenerMediaDesdeWhatsapp('media-1', { maxBytes: 2 }), /tamaño/);
     assert.equal(llamadas.length, 1);
     llamadas.length = 0;
     t.mock.method(global, 'fetch', async () => {
         llamadas.push(1);
         return llamadas.length === 1 ? new Response(JSON.stringify({ url: 'https://media.example.com/archivo' })) : new Response('abcd');
     });
-    await assert.rejects(api.descargarMedia('media-1', { maxBytes: 3 }), /tamaño/);
+    await assert.rejects(api.obtenerMediaDesdeWhatsapp('media-1', { maxBytes: 3 }), /tamaño/);
 });

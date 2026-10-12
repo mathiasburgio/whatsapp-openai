@@ -59,7 +59,7 @@ test('el login limita intentos y las rutas usan la nueva conversación', async (
         './services/whatsapp': {
             recibirMensajeWebhook() {}, configurarWebhook() {},
         },
-        './services/orquestador': {}, './services/mongo': {}, './services/archivos': {}, './services/metricas': {}, './services/prompts': {},
+        './services/orquestador': {}, './services/mongo': {}, './services/metricas': {}, './services/prompts': {},
         './services/sockets': { inicializar() {} },
         './services/usuarios': {
             iniciarSesion: (req, res) => { loginCalls++; res.json({ sesionActiva: true }); }, cerrarSesion() {},
@@ -69,6 +69,10 @@ test('el login limita intentos y las rutas usan la nueva conversación', async (
             find: filtro => { query = filtro; return { sort: valor => { orden = valor; return { limit: async () => [conversacion] }; } }; },
         },
         './models/mensaje': {},
+        './middlewares/tieneSesion': (req, res, next) => next(),
+        './middlewares/obtenerRawBody': require('../middlewares/obtenerRawBody'),
+        './middlewares/middlewareSession': (req, res, next) => next(),
+        './middlewares/createRateLimit': require('../middlewares/createRateLimit'),
         dotenv: { config() {} }, fs: { existsSync: () => true },
     };
     const root = path.join(__dirname, '..');
@@ -97,20 +101,24 @@ test('el login limita intentos y las rutas usan la nueva conversación', async (
     }
 
     for (let i = 0; i < 5; i++) {
-        const response = await request('/iniciar-sesion', 'POST');
+        const response = await request('/sesion/iniciar', 'POST');
         assert.equal(response.status, 200);
         assert(response.headers.ratelimit);
     }
-    const blocked = await request('/iniciar-sesion', 'POST');
+    const blocked = await request('/sesion/iniciar', 'POST');
     assert.equal(blocked.status, 429);
     assert(Number(blocked.headers['retry-after']) > 0);
     assert.match(blocked.body.error, /Demasiados intentos/);
     assert.equal(loginCalls, 5);
-    assert.equal((await request('/iniciar-sesion', 'POST', {}, '127.0.0.2')).status, 200);
-    for (let i = 0; i < 6; i++) assert.equal((await request('/verificar-sesion')).status, 200);
-    assert.equal((await request('/conversaciones')).status, 200);
+    assert.equal((await request('/sesion/iniciar', 'POST', {}, '127.0.0.2')).status, 200);
+    for (let i = 0; i < 6; i++) {
+        const respuesta = await request('/sesion/activa');
+        assert.equal(respuesta.status, 200);
+        assert.equal(respuesta.body, true);
+    }
+    assert.equal((await request('/conversaciones/obtener')).status, 200);
     assert.equal(JSON.stringify(query), JSON.stringify({ 'ultimoMensaje.deClienteParaSistema': true, 'ultimoMensaje.fechaLeida': null }));
     assert.deepEqual(orden, { requiereAtencion: -1, updatedAt: -1, _id: -1 });
-    assert.equal((await request('/conversaciones', 'GET', {}, '127.0.0.1', { orden: 'pendientes' })).status, 200);
+    assert.equal((await request('/conversaciones/obtener', 'GET', {}, '127.0.0.1', { orden: 'pendientes' })).status, 200);
     assert.deepEqual(query, { $or: [{ requiereAtencion: true }, { 'ultimoMensaje.deClienteParaSistema': true }] });
 });

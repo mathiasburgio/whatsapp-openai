@@ -5,8 +5,6 @@ const mixed = mongoose.Schema.Types.Mixed;
 const mensajeSchema = new mongoose.Schema({
     conversacionId: oid,
     whatsappId: String, //ID entrante de Meta; evita duplicados por reintentos del webhook
-    estadoProcesamiento: String, //pendiente, completado o fallido
-    errorProcesamiento: String,
     deClienteParaSistema: Boolean, //ordena en un boolean el sentido de la coversacion
     deSistemaParaCliente: Boolean, //ordena en un boolean el sentido de la coversacion
 
@@ -21,11 +19,7 @@ const mensajeSchema = new mongoose.Schema({
     respuestaAutomatica: Boolean, //respuesta del bot aceptada por WhatsApp
     respuestaA: oid, //mensaje del cliente que originó la respuesta automática
     estadoBot: String, //pendiente, procesando, enviando, respondido, derivado, omitido, fallido o envio_incierto
-    revisionBot: Number,
     errorBot: String,
-    solicitudEnvioId: String, //clave de reintento del envío manual desde el panel
-    estadoEnvio: String, //enviando, enviado, fallido o envio_incierto
-    errorEnvio: String,
     vendedorId: oid,
     accionEjecutada: String, //que accion llamo el LLM
     parametroEjecutado: String, //parametro que uso el LLM (ej "ando buscando una moto honda navi"-> "moto honda navi")
@@ -33,16 +27,14 @@ const mensajeSchema = new mongoose.Schema({
     
     esAudio: Boolean,
     audioArchivo: String,
-    audioMimeType: String,
     transcripcionAudio: String,
     
     esImagen: Boolean,
     imagenArchivo: String,
-    imagenMimeType: String,
     transcripcionImagen: String,
 
     fechaEmitida: Date, // cuando se deriva el mensaje
-    fechaEntrega: Date, // cuando se entrega el mensaje
+    fechaEntregada: Date, // cuando WhatsApp confirma la entrega
     fechaLeida: Date, // cuando se lee el mensaje
     
     crudo: mixed, //en crudo lo q llega del webhook
@@ -58,5 +50,4 @@ const mensajeSchema = new mongoose.Schema({
 mensajeSchema.index({ conversacionId: 1, createdAt: -1 });
 mensajeSchema.index({ whatsappId: 1 }, { unique: true, partialFilterExpression: { whatsappId: { $type: 'string' } } });
 mensajeSchema.index({ respuestaA: 1 }, { unique: true, partialFilterExpression: { respuestaA: { $type: 'objectId' }, respuestaAutomatica: true } });
-mensajeSchema.index({ solicitudEnvioId: 1 }, { unique: true, partialFilterExpression: { solicitudEnvioId: { $type: 'string' } } });
 module.exports = mongoose.model('Mensaje', mensajeSchema);

@@ -10,7 +10,7 @@ test('el listado prioriza vendedores sobre fechas y la vista sin responder conse
             val() { return this.valor; }, html(valor) { this.contenido = valor; return this; } });
         return elementos.get(selector);
     };
-    $.get = async () => ({ sesionActiva: false });
+    $.get = async () => false;
     const context = vm.createContext({ $, io: () => ({ on() {} }) });
     vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/index.js'), 'utf8'), context);
     vm.runInContext(`actualizarControlBot = () => {}; conversaciones = [

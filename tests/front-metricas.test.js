@@ -18,7 +18,7 @@ function preparar(respuesta = async () => datos) {
         });
         return elementos.get(selector);
     };
-    jquery.get = url => url === '/verificar-sesion' ? Promise.resolve({ sesionActiva: false }) : respuesta();
+    jquery.get = url => url === '/sesion/activa' ? Promise.resolve(false) : respuesta();
     const dialog = { open: false, showModal() { this.open = true; }, close() { this.open = false; } };
     // Bootstrap no está presente: abrir el modal no debe depender de ese recurso externo.
     const contexto = vm.createContext({ $: jquery, io: () => ({ on() {} }), document: { getElementById: () => dialog } });

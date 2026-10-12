@@ -7,8 +7,9 @@ const Conversacion = require('../models/conversacion');
 const Mensaje = require('../models/mensaje');
 
 function preparar(t, servicios = {}) {
-    const conversaciones = [], mensajes = [], cambios = [], logs = [];
+    const conversaciones = [], mensajes = [], cambios = [], logs = [], errores = [], archivos = [];
     t.mock.method(console, 'log', (...args) => logs.push(args));
+    t.mock.method(console, 'error', (...args) => errores.push(args));
     function persistir(documento, lista) {
         documento.save = async () => { await documento.validate(); return documento; };
         lista.push(documento);
@@ -34,26 +35,29 @@ function preparar(t, servicios = {}) {
         },
         '../models/mensaje': {
             findOne: query => query.whatsappId ? Promise.resolve(mensajes.find(item => item.whatsappId === query.whatsappId))
-                : query.solicitudEnvioId ? Promise.resolve(mensajes.find(item => item.solicitudEnvioId === query.solicitudEnvioId))
-                    : { sort: async () => [...mensajes].reverse().find(item => String(item.conversacionId) === String(query.conversacionId) && item.deClienteParaSistema) },
+                : { sort: async () => [...mensajes].reverse().find(item => String(item.conversacionId) === String(query.conversacionId) && item.deClienteParaSistema) },
             create: datos => persistir(new Mensaje(datos), mensajes),
         },
         './sockets': { notificarCambios: async (conversacion, mensaje) => {
             cambios.push({ conversacion: conversacion.toObject(), mensaje: mensaje.toObject() });
         } },
-        './whatsapp': servicios.whatsapp || { descargarMedia: async () => assert.fail('El texto no descarga archivos') },
-        './archivos': { obtenerMedia: async (mensaje, tipo, descriptor, phoneNumberId) => {
-            const archivo = await servicios.whatsapp.descargarMedia(descriptor.id, { phoneNumberId, maxBytes: tipo === 'imagen' ? 5000000 : 15000000 });
-            mensaje[`${tipo}Archivo`] = 'archivo.' + (tipo === 'imagen' ? 'jpg' : 'ogg');
-            mensaje[`${tipo}MimeType`] = archivo.mimeType;
-            await mensaje.save();
-            return archivo;
-        } },
+        './whatsapp': servicios.whatsapp || { obtenerMediaDesdeWhatsapp: async () => assert.fail('El texto no descarga archivos') },
+        'node:fs/promises': {
+            mkdir: async () => {},
+            writeFile: async (ruta, buffer, opciones) => { archivos.push({ ruta, buffer, opciones }); },
+        },
         './openai': servicios.openai || { procesarImagen: async () => assert.fail('El texto no consume OpenAI'),
             transcribirAudio: async () => assert.fail('El texto no consume OpenAI') },
         './promociones': { registrar: async () => {} },
         './bot': { responder: async mensaje => { assert.equal(mensaje.estadoBot, 'omitido'); } },
         './prompts': { cargar: async () => ({ imagen: 'Describí con incertidumbre.', audio: 'Transcribí motos.' }) },
+        './envios': {
+            serializar: require('../services/envios').serializar,
+            verificarLimiteMensual: async () => {
+                const cantidad = mensajes.filter(item => item.deSistemaParaCliente && item.whatsappId).length;
+                if (cantidad >= (servicios.limite ?? 2000)) throw new Error('Se alcanzó el límite mensual de respuestas de WhatsApp.');
+            },
+        },
     };
     const filename = path.resolve(__dirname, '../services/orquestador.js');
     const modulo = new Module(filename);
@@ -62,7 +66,7 @@ function preparar(t, servicios = {}) {
     const original = createRequire(filename);
     modulo.require = nombre => Object.hasOwn(mocks, nombre) ? mocks[nombre] : original(nombre);
     modulo._compile(fs.readFileSync(filename, 'utf8'), filename);
-    return { api: modulo.exports, conversaciones, mensajes, cambios, logs };
+    return { api: modulo.exports, conversaciones, mensajes, cambios, logs, errores, archivos };
 }
 
 test('la recepción crea o reutiliza conversación, persiste texto y lo muestra en consola y panel', async t => {
@@ -80,22 +84,21 @@ test('la recepción crea o reutiliza conversación, persiste texto y lo muestra 
     assert.equal(recibido.mensaje.deSistemaParaCliente, false);
     assert.deepEqual(recibido.mensaje.crudo, crudo);
     assert.equal(recibido.mensaje.usoLLM, false);
-    assert.equal(recibido.mensaje.estadoProcesamiento, 'completado');
     assert.equal(conversaciones[0].nombre, 'Cliente');
     assert.equal(conversaciones[0].ultimoMensaje.contenido, 'Hola');
     assert.deepEqual(logs.at(-1)[0], { mensaje: 'Hola', respuestaOpenAi: null });
-    assert.equal(cambios.at(-1).mensaje.estadoProcesamiento, 'completado');
+    assert.equal(cambios.at(-1).mensaje.contenido, 'Hola');
     await api.recibirMensajeWhatsapp('5491112345678', 'Otro mensaje', undefined, undefined, { ...datos, whatsappId: 'wamid.2' });
     assert.equal(conversaciones.length, 1);
     assert.equal(mensajes.length, 2);
     assert.equal(conversaciones[0].ultimoMensaje.contenido, 'Otro mensaje');
-    assert.equal(typeof api.recibirMensajeVendedor, 'function');
+    assert.equal(typeof api.responderMensajePorApiWhataspp, 'function');
 });
 
 test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de conversación', async t => {
     const descargas = [], llamadas = [];
-    const { api, conversaciones, mensajes, cambios, logs } = preparar(t, {
-        whatsapp: { descargarMedia: async (id, opciones) => {
+    const { api, conversaciones, mensajes, cambios, logs, archivos } = preparar(t, {
+        whatsapp: { obtenerMediaDesdeWhatsapp: async (id, opciones) => {
             descargas.push({ id, opciones });
             return { buffer: Buffer.from(id), mimeType: id === 'imagen' ? 'image/jpeg' : 'audio/ogg' };
         } },
@@ -110,11 +113,16 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
     assert.match(llamadas[0][0], /^data:image\/jpeg;base64,/);
     assert.equal(llamadas[0][1], 'Identificá esta moto');
     assert.equal(llamadas[0][2].conversacionId.toString(), imagen.conversacion._id.toString());
+    assert.equal(String(llamadas[0][2].mensajeId), String(imagen.mensaje._id));
     assert.equal(llamadas[0][2].instrucciones, 'Describí con incertidumbre.');
     assert.equal(imagen.mensaje.transcripcionImagen, 'Una Honda Navi');
     assert.equal(imagen.mensaje.contenido, 'Identificá esta moto\nUna Honda Navi');
     assert.equal(imagen.mensaje.contenidoOriginal, 'Identificá esta moto');
-    assert.equal(imagen.mensaje.imagenArchivo, 'archivo.jpg');
+    assert.match(imagen.mensaje.imagenArchivo, /^[a-f0-9-]+\.jpg$/);
+    assert.equal(path.basename(archivos[0].ruta), imagen.mensaje.imagenArchivo);
+    assert.equal(path.basename(path.dirname(archivos[0].ruta)), 'imagenes');
+    assert.deepEqual(archivos[0].buffer, Buffer.from('imagen'));
+    assert.deepEqual(archivos[0].opciones, { flag: 'wx' });
     assert.equal(imagen.mensaje.esImagen, true);
     assert.equal(imagen.mensaje.usoLLM, true);
     assert.equal(imagen.mensaje.tokens.total, 25);
@@ -122,7 +130,11 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
     assert.deepEqual(llamadas[1][0], Buffer.from('audio'));
     assert.equal(llamadas[1][1], 'audio/ogg');
     assert.equal(llamadas[1][2].prompt, 'Transcribí motos.');
+    assert.equal(String(llamadas[1][2].mensajeId), String(mensajes[1]._id));
     assert.equal(mensajes[1].esAudio, true);
+    assert.match(mensajes[1].audioArchivo, /^[a-f0-9-]+\.ogg$/);
+    assert.equal(path.basename(archivos[1].ruta), mensajes[1].audioArchivo);
+    assert.equal(path.basename(path.dirname(archivos[1].ruta)), 'audio');
     assert.equal(mensajes[1].transcripcionAudio, 'Quiero comprarla');
     assert.equal(mensajes[1].contenido, 'Quiero comprarla');
     assert.equal(conversaciones[0].tokens.total, 38);
@@ -131,7 +143,7 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
     assert.equal(descargas[0].opciones.phoneNumberId, 'numero-1');
     assert.equal(descargas[0].opciones.maxBytes, 5000000);
     assert.equal(descargas[1].opciones.maxBytes, 15000000);
-    assert.equal(cambios[0].mensaje.estadoProcesamiento, 'pendiente');
+    assert.equal(cambios[0].mensaje.contenido, 'Identificá esta moto');
     assert.equal(cambios.at(-1).conversacion.ultimoMensaje.transcripcionAudio, 'Quiero comprarla');
     assert.deepEqual(logs.at(-1)[0], { mensaje: 'Quiero comprarla', respuestaOpenAi: 'Quiero comprarla' });
 });
@@ -139,7 +151,7 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
 test('reintentos concurrentes no duplican mensajes, conversación ni consumo de OpenAI', async t => {
     let consultas = 0;
     const { api, conversaciones, mensajes } = preparar(t, {
-        whatsapp: { descargarMedia: async () => ({ buffer: Buffer.from('imagen'), mimeType: 'image/png' }) },
+        whatsapp: { obtenerMediaDesdeWhatsapp: async () => ({ buffer: Buffer.from('imagen'), mimeType: 'image/png' }) },
         openai: { procesarImagen: async () => { consultas++; return { resultado: 'Una moto', tokensGastados: { total: 5 } }; } },
     });
     const resultados = await Promise.all([
@@ -155,28 +167,26 @@ test('reintentos concurrentes no duplican mensajes, conversación ni consumo de 
     assert.equal(conversaciones[0].ultimoMensaje.contenido, 'Hola');
 });
 
-test('un fallo de OpenAI conserva el mensaje, informa al panel y permite reintentar', async t => {
+test('un fallo de OpenAI conserva el mensaje, se registra en consola y no se reprocesa', async t => {
     let intentos = 0;
-    const { api, conversaciones, mensajes, cambios } = preparar(t, {
-        whatsapp: { descargarMedia: async () => ({ buffer: Buffer.from('audio'), mimeType: 'audio/ogg' }) },
+    const { api, conversaciones, mensajes, errores } = preparar(t, {
+        whatsapp: { obtenerMediaDesdeWhatsapp: async () => ({ buffer: Buffer.from('audio'), mimeType: 'audio/ogg' }) },
         openai: { transcribirAudio: async () => {
             if (++intentos === 1) throw new Error('Cupo agotado');
             return { resultado: 'Hola desde audio', tokensGastados: { total: 10 } };
         } },
     });
     const recibir = () => api.recibirMensajeWhatsapp('5491112345678', '', undefined, { id: 'audio' }, { whatsappId: 'wamid.audio' });
-    await assert.rejects(recibir(), /Cupo agotado/);
-    assert.equal(mensajes.length, 1);
-    assert.equal(mensajes[0].estadoProcesamiento, 'fallido');
-    assert.equal(mensajes[0].errorProcesamiento, 'Cupo agotado');
-    assert.equal(mensajes[0].audioArchivo, 'archivo.ogg');
-    assert.equal(mensajes[0].contenido, '[Audio]');
-    assert.equal(cambios.at(-1).mensaje.estadoProcesamiento, 'fallido');
     await recibir();
     assert.equal(mensajes.length, 1);
-    assert.equal(mensajes[0].estadoProcesamiento, 'completado');
-    assert.equal(mensajes[0].errorProcesamiento, undefined);
-    assert.equal(conversaciones[0].tokens.total, 10);
+    assert.equal(mensajes[0].estadoBot, 'omitido');
+    assert.match(mensajes[0].audioArchivo, /^[a-f0-9-]+\.ogg$/);
+    assert.equal(mensajes[0].contenido, '[Audio]');
+    assert.match(String(errores[0][1]), /Cupo agotado/);
+    assert.equal((await recibir()).duplicado, true);
+    assert.equal(mensajes.length, 1);
+    assert.equal(intentos, 1);
+    assert.equal(conversaciones[0].tokens.total ?? 0, 0);
 });
 
 test('eventos antiguos no reemplazan el último mensaje y entradas inválidas no se guardan', async t => {
@@ -190,16 +200,27 @@ test('eventos antiguos no reemplazan el último mensaje y entradas inválidas no
     assert.equal(conversaciones[0].ultimoMensaje.contenido, 'Nuevo');
 });
 
-test('un archivo no descargable conserva el mensaje sin consumir OpenAI', async t => {
-    const { api, mensajes, conversaciones } = preparar(t, {
-        whatsapp: { descargarMedia: async () => { throw new Error('Archivo vencido'); } },
+test('un archivo no descargable conserva el mensaje e informa el error en consola', async t => {
+    const { api, mensajes, conversaciones, errores } = preparar(t, {
+        whatsapp: { obtenerMediaDesdeWhatsapp: async () => { throw new Error('Archivo vencido'); } },
     });
-    await assert.rejects(api.recibirMensajeWhatsapp('5491112345678', 'Mi moto', { id: 'imagen' }, undefined,
-        { whatsappId: 'wamid.archivo' }), /Archivo vencido/);
+    await api.recibirMensajeWhatsapp('5491112345678', 'Mi moto', { id: 'imagen' }, undefined,
+        { whatsappId: 'wamid.archivo' });
     assert.equal(mensajes[0].contenido, 'Mi moto');
-    assert.equal(mensajes[0].estadoProcesamiento, 'fallido');
+    assert.equal(mensajes[0].estadoBot, 'omitido');
     assert.equal(mensajes[0].usoLLM, false);
-    assert.equal(conversaciones[0].ultimoMensaje.errorProcesamiento, 'Archivo vencido');
+    assert.equal(conversaciones[0].ultimoMensaje.contenido, 'Mi moto');
+    assert.match(String(errores[0][1]), /Archivo vencido/);
+});
+
+test('un formato de imagen no admitido no se escribe ni se vincula al mensaje', async t => {
+    const { api, mensajes, archivos, errores } = preparar(t, {
+        whatsapp: { obtenerMediaDesdeWhatsapp: async () => ({ buffer: Buffer.from('<svg/>'), mimeType: 'image/svg+xml' }) },
+    });
+    await api.recibirMensajeWhatsapp('5491112345678', '', { id: 'imagen' }, undefined, { whatsappId: 'wamid.svg' });
+    assert.equal(archivos.length, 0);
+    assert.equal(mensajes[0].imagenArchivo, undefined);
+    assert.match(String(errores[0][1]), /formato no compatible/);
 });
 
 test('una respuesta manual se integra mientras una imagen está en proceso y no queda reemplazada al terminar', async t => {
@@ -209,7 +230,7 @@ test('una respuesta manual se integra mientras una imagen está en proceso y no 
     let envios = 0;
     const { api, conversaciones, mensajes } = preparar(t, {
         whatsapp: {
-            descargarMedia: async () => ({ buffer: Buffer.from('imagen'), mimeType: 'image/jpeg' }),
+            obtenerMediaDesdeWhatsapp: async () => ({ buffer: Buffer.from('imagen'), mimeType: 'image/jpeg' }),
             enviarMensaje: async datos => { envios++; assert.equal(datos.phoneNumberId, 'numero-test'); return { messages: [{ id: 'wamid.vendedor' }] }; },
         },
         openai: { procesarImagen: async () => { imagenEnProceso(); await analisis; return { resultado: 'Una moto', tokensGastados: { total: 5 } }; } },
@@ -218,9 +239,8 @@ test('una respuesta manual se integra mientras una imagen está en proceso y no 
         { whatsappId: 'wamid.imagen', phoneNumberId: 'numero-test', receptor: '5491198765432', fechaEmitida: new Date('2026-01-01') });
     await inicio;
     conversaciones[0].requiereAtencion = true;
-    const solicitudId = '11111111-1111-4111-8111-111111111111';
-    const enviada = await api.recibirMensajeVendedor(String(conversaciones[0]._id), 'Hola, soy el vendedor.', { solicitudId });
-    assert.equal(enviada.estadoEnvio, 'enviado');
+    const enviada = await api.responderMensajePorApiWhataspp(String(conversaciones[0]._id), 'Hola, soy el vendedor.');
+    assert(enviada.fechaEmitida instanceof Date);
     assert.equal(enviada.respuestaAutomatica, false);
     assert.equal(conversaciones[0].requiereAtencion, false);
     liberarImagen();
@@ -228,27 +248,33 @@ test('una respuesta manual se integra mientras una imagen está en proceso y no 
     assert.equal(conversaciones[0].ultimoMensaje.whatsappId, 'wamid.vendedor');
     assert.equal(conversaciones[0].tokens.total, 5);
     assert.equal(mensajes.length, 2);
-    await api.recibirMensajeVendedor(String(conversaciones[0]._id), 'Hola, soy el vendedor.', { solicitudId });
     assert.equal(envios, 1);
 });
 
-test('los fallos manuales se muestran como no enviados y un envío incierto no se repite', async t => {
+test('un envío manual sin confirmación no crea mensaje y deja la conversación pendiente', async t => {
     let envios = 0;
-    const { api, conversaciones, mensajes } = preparar(t, { whatsapp: { enviarMensaje: async () => {
+    const { api, conversaciones, mensajes, errores } = preparar(t, { whatsapp: { enviarMensaje: async () => {
         envios++; throw envios === 1 ? Object.assign(new Error('Fuera de la ventana de atención'), { status: 400 }) : new Error('Tiempo agotado');
     } } });
     await api.recibirMensajeWhatsapp('5491112345678', 'Hola', undefined, undefined, { whatsappId: 'wamid.in' });
     const id = String(conversaciones[0]._id);
-    const fallida = await api.recibirMensajeVendedor(id, 'Respuesta', { solicitudId: '11111111-1111-4111-8111-111111111111' });
-    assert.equal(fallida.estadoEnvio, 'fallido');
-    assert.equal(fallida.whatsappId, undefined);
+    await assert.rejects(api.responderMensajePorApiWhataspp(id, 'Respuesta'), /Fuera de la ventana/);
     assert.equal(conversaciones[0].ultimoMensaje.whatsappId, 'wamid.in');
     assert.equal(conversaciones[0].requiereAtencion, true);
-    const datos = { solicitudId: '22222222-2222-4222-8222-222222222222' };
-    const incierta = await api.recibirMensajeVendedor(id, 'Respuesta', datos);
-    assert.equal(incierta.estadoEnvio, 'envio_incierto');
-    await api.recibirMensajeVendedor(id, 'Respuesta', datos);
+    await assert.rejects(api.responderMensajePorApiWhataspp(id, 'Respuesta'), /Tiempo agotado/);
     assert.equal(envios, 2);
-    assert.equal(mensajes.length, 3);
-    await assert.rejects(api.recibirMensajeVendedor(id, 'Otro texto', datos), /identificador/);
+    assert.equal(mensajes.length, 1);
+    assert.equal(errores.length, 2);
+});
+
+test('el envío manual se bloquea cuando se agotó el cupo de WhatsApp', async t => {
+    let llamadasWhatsapp = 0;
+    const { api, conversaciones, mensajes } = preparar(t, { limite: 0, whatsapp: {
+        enviarMensaje: async () => { llamadasWhatsapp++; return { messages: [{ id: 'wamid.no-debe-enviarse' }] }; },
+    } });
+    await api.recibirMensajeWhatsapp('5491112345678', 'Hola', undefined, undefined, { whatsappId: 'wamid.entrada' });
+    await assert.rejects(api.responderMensajePorApiWhataspp(String(conversaciones[0]._id), 'Respuesta'), /límite mensual/);
+    assert.equal(llamadasWhatsapp, 0);
+    assert.equal(mensajes.length, 1);
+    assert.equal(conversaciones[0].requiereAtencion, true);
 });

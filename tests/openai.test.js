@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Module } = require('node:module');
+const mongoose = require('mongoose');
 const Uso = require('../models/uso');
 
 function preparar(t) {
@@ -90,14 +91,9 @@ test('texto, imagen y web respetan las opciones y guardan sus consumos', async t
         assert(peticion.signal instanceof AbortSignal);
     }
     assert.equal(llamadas[2].cuerpo.max_tool_calls, 1);
-    assert.equal(registros[0].texto, 'Hola');
-    assert.equal(registros[0].contexto, 'Sé breve.');
     assert.equal(registros[1].esImagen, true);
-    assert.equal(registros[1].imagenUrl, 'https://example.com/imagen.png');
-    assert.equal(registros[1].contexto, 'Sé breve.\nDescribila');
     assert.equal(registros[2].esBusquedaWeb, true);
-    assert.equal(registros[2].busqueda, 'Motos disponibles');
-    assert.equal(registros[2].contexto, 'Sé breve.');
+    assert(registros.every(uso => ['texto', 'imagenUrl', 'busqueda', 'contexto'].every(campo => uso[campo] === undefined)));
     assert(registros.every(uso => uso.guardado && uso.estado === 'completado' && uso.tokensTotal === 15));
 });
 
@@ -127,30 +123,33 @@ test('los prompts del bot usan un esquema JSON estricto y devuelven un objeto', 
         return respuesta({ output_text: '{"mensaje":"Hola"}' });
     };
     assert.deepEqual((await api.procesarTexto('Cliente', { instrucciones: 'Reglas.', esquema: { nombre: 'respuesta', schema } })).resultado, { mensaje: 'Hola' });
-    assert.equal(registros[0].contexto, 'Reglas.');
     assert.equal(registros[0].tokensTotal, 15);
 });
 
 test('el audio usa transcripciones, mide duración y registra tokens y segundos', async t => {
     const { api, registros } = preparar(t);
+    const mensajeId = new mongoose.Types.ObjectId();
+    const prompts = [];
     global.fetch = async (url, opciones) => {
         assert.match(url, /audio\/transcriptions$/);
         assert(opciones.body instanceof FormData);
         assert.equal(opciones.body.get('model'), 'gpt-4o-mini-transcribe');
+        prompts.push(opciones.body.get('prompt'));
         assert.equal(opciones.headers['Content-Type'], undefined);
         return respuesta({ text: 'Hola desde audio' });
     };
-    const audio = await api.procesarAudio(audioWav().toString('base64'), 'wav');
+    const audio = await api.transcribirAudio(audioWav(), 'audio/wav', { mensajeId });
     assert.equal(audio.resultado, 'Hola desde audio');
     assert.equal(audio.segundosAudio, 1);
     assert.equal(registros[0].segundos, 1);
     assert.equal(registros[0].esAudio, true);
     assert.equal(registros[0].tokensTotal, 15);
-    assert.deepEqual(Buffer.from(registros[0].audio), audioWav());
-    assert.equal(registros[0].audioMimeType, 'audio/wav');
-    assert.equal(registros[0].contexto, 'Transcribí este audio.');
+    assert.equal(String(registros[0].mensajeId), String(mensajeId));
+    assert.equal(registros[0].audio, undefined);
+    assert.equal(registros[0].audioMimeType, undefined);
     await api.transcribirAudio(audioWav(), 'audio/wav', { prompt: 'Audio sobre motos.' });
-    assert.equal(registros[1].contexto, 'Audio sobre motos.');
+    assert.deepEqual(prompts, ['Transcribí este audio.', 'Audio sobre motos.']);
+    assert.equal(registros[1].contexto, undefined);
 });
 
 test('las respuestas incompletas conservan tokens y los rechazos no consumen cupo', async t => {
@@ -158,7 +157,6 @@ test('las respuestas incompletas conservan tokens y los rechazos no consumen cup
     global.fetch = async () => respuesta({ status: 'incomplete' });
     await assert.rejects(api.procesarTexto('Hola'), /completar/);
     assert.equal(registros[0].estado, 'incompleto');
-    assert.equal(registros[0].texto, 'Hola');
     assert.equal(registros[0].tokensTotal, 15);
     global.fetch = async () => respuesta({ error: { message: 'Clave inválida' }, usage: undefined }, 401);
     await assert.rejects(api.procesarTexto('Hola'), /Clave inválida/);
@@ -174,7 +172,7 @@ test('entradas inválidas, cancelación y MongoDB desconectado no llaman a OpenA
     const { api, registros, modelo } = preparar(t);
     global.fetch = async () => assert.fail('No debe enviar una solicitud');
     await assert.rejects(api.procesarTexto(''), /vacío/);
-    await assert.rejects(api.procesarAudio('inválido!', 'wav'), /base64/);
+    await assert.rejects(api.transcribirAudio('inválido!', 'audio/wav'), /Buffer/);
     const controller = new AbortController(); controller.abort();
     await assert.rejects(api.procesarTexto('Hola', { signal: controller.signal }), { name: 'AbortError' });
     modelo.db.readyState = 0;
@@ -182,7 +180,7 @@ test('entradas inválidas, cancelación y MongoDB desconectado no llaman a OpenA
     assert.equal(registros.length, 0);
 });
 
-test('Decisions envía prompt, opciones e instrucciones y conserva la respuesta y todo el uso', async t => {
+test('Decisions envía prompt, opciones e instrucciones y registra su consumo', async t => {
     const { api, registros } = preparar(t);
     const opciones = [{ value: 'comprar', description: 'Comprar una moto' }, { value: 'otro' }];
     const answer = { type: 'choice', name: 'intencion', choice: 'comprar', confidence: 0.98,
@@ -207,11 +205,7 @@ test('Decisions envía prompt, opciones e instrucciones y conserva la respuesta 
     const uso = registros[0].toObject();
     assert.equal(uso.esDecision, true);
     assert.equal(uso.esTexto, true);
-    assert.equal(uso.texto, 'Quiero una moto');
-    assert.equal(uso.contexto, 'Clasificá al cliente.');
-    assert.deepEqual(uso.preguntasDecision[0].choices, opciones);
-    assert.deepEqual(uso.respuestasDecision, [answer]);
-    assert.deepEqual(uso.usoDetalle, usage);
+    assert(['texto', 'contexto', 'preguntasDecision', 'respuestasDecision', 'usoDetalle'].every(campo => uso[campo] === undefined));
     assert.equal(uso.tokensSalida, 0);
     assert.equal(uso.estado, 'completado');
     assert(registros[0].guardado);

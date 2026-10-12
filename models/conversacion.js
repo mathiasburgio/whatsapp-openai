@@ -7,12 +7,10 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
     telefono: String, //telefono del cliente
     resumen: String, //resumen de la conversacion q va generando el bot
     turnosDesdeResumen: { type: Number, default: 0 },
-    origenInicializado: { type: Boolean, default: false },
-    origenPromocion: mixed,
+    origenPromocion: { type: String, default: '' }, //texto asociado a una posible promoción
     requiereAtencion: { type: Boolean, default: false },
     motivoDerivacion: String,
     botActivo: { type: Boolean, default: false }, //si debe auto-contestar el LLM
-    revisionBot: { type: Number, default: 0 }, //invalida respuestas en curso al cambiar el control
     ultimoMensaje: mixed, //copia del schema de "mensaje"
 
 

@@ -2,20 +2,25 @@ require('dotenv').config({ quiet: true });
 
 const http = require('http');
 const express = require('express');
-const { rateLimit } = require('express-rate-limit');
-const session = require('express-session');
-const { MongoStore } = require('connect-mongo');
 const app = express();
 const server = http.createServer(app);
+
+//importo middlewares
+const tieneSesion = require('./middlewares/tieneSesion');
+const obtenerRawBody = require('./middlewares/obtenerRawBody');
+const middlewareSesion = require('./middlewares/middlewareSession');
+const createRateLimit = require('./middlewares/createRateLimit');
+
+// importo los servicios
 const whatsappService = require('./services/whatsapp');
 const orquestadorService = require('./services/orquestador');
 const socketsService = require('./services/sockets');
 const mongoService = require('./services/mongo');
 const usuarioService = require('./services/usuarios');
+
 const cUsuarios = require('./models/usuarios');
 const cConversaciones = require('./models/conversacion');
 const cMensajes = require('./models/mensaje');
-const archivosService = require('./services/archivos');
 const metricasService = require('./services/metricas');
 const promptsService = require('./services/prompts');
 const mongoose = require('mongoose');
@@ -28,68 +33,41 @@ if( !fs.existsSync(path.join(__dirname, '/uploads/audio'))) fs.mkdirSync(path.jo
 if( !fs.existsSync(path.join(__dirname, '/uploads/imagenes'))) fs.mkdirSync(path.join(__dirname, '/uploads/imagenes'));
 
 // Midleware necesario para validar mensajes de WhatsApp entrantes
-app.use(express.json({
-    verify: (req, res, body) => {
-        req.rawBody = Buffer.from(body);
-    },
-}));
+app.use(express.json({ verify: obtenerRawBody }));
 
-const middlewareSesion = session({
-    name: 'whatsapp_openai_session',
-    secret: process.env.SESSION_SECRET || 'default_secret',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 24 * 60 * 60 * 1000,
-    },
-});
 app.use(middlewareSesion);
+
+//inicializo el servicio de sockets
 socketsService.inicializar(server, middlewareSesion);
 
-async function tieneSesion(req, res){
-    if (!req.session.usuarioId || !await cUsuarios.exists({ _id: req.session.usuarioId, habilitado: true })) {
-        res.status(401).json({ error: 'Iniciá sesión para continuar.' });
-        return false;
-    }
-    return true;
-}
-function crearRateLimit(windowMs=15 * 60 * 1000, limit=5, message={ error: 'Demasiados intentos. Volvé a intentar más tarde.' }) {
-    return rateLimit({
-        windowMs,
-        limit,
-        standardHeaders: 'draft-8',
-        legacyHeaders: false,
-        message,
-    });
-}
-// Registramos las rutas después del middleware de sesión.
-
-// Rutas de la aplicación WEB
+// Ruta index
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname,"public",'index.html'));
 });
 
+//rutas publicas (para el frontend)
 app.use(express.static(path.join(__dirname, 'public')));
-app.post("/iniciar-sesion", crearRateLimit(), usuarioService.iniciarSesion);
-app.post("/cerrar-sesion", usuarioService.cerrarSesion);
 
-app.get('/verificar-sesion', async (req, res) => {
+//rutas de usuarios
+app.post('/sesion/iniciar', createRateLimit(), usuarioService.iniciarSesion);
+app.post('/sesion/cerrar', usuarioService.cerrarSesion);
+app.get('/sesion/cerrar', usuarioService.cerrarSesion);
+
+
+// Verifica si hay una sesión activa y si el usuario está habilitado.
+app.get('/sesion/activa', async (req, res) => {
     try{
         const sesionActiva = !!req.session.usuarioId && !!await cUsuarios.exists({ _id: req.session.usuarioId, habilitado: true });
-        res.json({ sesionActiva });
+        res.json(sesionActiva);
     }catch(error){
         console.error(error);
         res.status(500).json({ error: 'No se pudo verificar la sesión.' });
     }
 });
 
-app.get("/conversaciones", async (req, res)=>{
+// obtiene las conversaciones (puede ordenar por pendientes y filtrar por no leidas)
+app.get('/conversaciones/obtener', tieneSesion, async (req, res)=>{
     try{
-        if(!await tieneSesion(req, res)) return;
-
         const {noLeidas} = req.query;
         let query = noLeidas === 'true' || noLeidas === '1'
             ? { 'ultimoMensaje.deClienteParaSistema': true, 'ultimoMensaje.fechaLeida': null } : {};
@@ -108,9 +86,9 @@ app.get("/conversaciones", async (req, res)=>{
     }
 });
 
-app.get("/mensajes", async (req, res)=>{
+// obtiene los mensajes de una conversación (paginado)
+app.get('/conversacion/mensajes', tieneSesion, async (req, res)=>{
     try{
-        if(!await tieneSesion(req, res)) return;
         const {conversacionId, pagina} = req.query;
         const numeroPagina = Number(pagina || 0);
         if (!mongoose.isObjectIdOrHexString(conversacionId) || !Number.isSafeInteger(numeroPagina) || numeroPagina < 0) {
@@ -130,38 +108,51 @@ app.get("/mensajes", async (req, res)=>{
     }
 });
 
-app.post('/conversaciones/:conversacionId/bot', async (req, res) => {
-    try {
-        if (!await tieneSesion(req, res)) return;
-        const { conversacionId } = req.params;
-        if (!mongoose.isObjectIdOrHexString(conversacionId) || typeof req.body?.botActivo !== 'boolean') {
-            return res.status(400).json({ error: 'Indicá una conversación y un estado del bot válidos.' });
+function cambiarEstadoBot(botActivo) {
+    return async (req, res) => {
+        try {
+            const { conversacionId } = req.body || {};
+            if (!mongoose.isObjectIdOrHexString(conversacionId)) {
+                return res.status(400).json({ error: 'Indicá una conversación válida.' });
+            }
+            const conversacion = await cConversaciones.findOneAndUpdate({ _id: conversacionId },
+                { $set: { botActivo } }, { returnDocument: 'after', runValidators: true });
+            if (!conversacion) return res.status(404).json({ error: 'Conversación no encontrada.' });
+            await socketsService.notificarCambios(conversacion);
+            res.json(conversacion);
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({ error: 'No se pudo cambiar el estado del bot.' });
         }
-        const conversacion = await cConversaciones.findOneAndUpdate({ _id: conversacionId },
-            { $set: { botActivo: req.body.botActivo }, $inc: { revisionBot: 1 } }, { returnDocument: 'after', runValidators: true });
-        if (!conversacion) return res.status(404).json({ error: 'Conversación no encontrada.' });
-        await socketsService.notificarCambios(conversacion);
-        res.json(conversacion);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'No se pudo cambiar el estado del bot.' });
-    }
-});
+    };
+}
+app.post('/conversaciones/habilitar-bot', tieneSesion, cambiarEstadoBot(true));
+app.post('/conversaciones/deshabilitar-bot', tieneSesion, cambiarEstadoBot(false));
 
-app.get('/metricas/mes', async (req, res) => {
+// Devuelve las métricas de un mes UTC. ?anio=YYYY&mes=M permite elegir el período;
+// cada parámetro omitido toma el año o mes actual del reloj del servidor.
+app.get('/metricas/mes', tieneSesion, async (req, res) => {
     try {
-        if (!await tieneSesion(req, res)) return;
+        const ahora = new Date();
+        const { anio, mes } = req.query;
+        if ((anio !== undefined && (typeof anio !== 'string' || !/^[0-9]{1,4}$/.test(anio) || Number(anio) < 1)) ||
+            (mes !== undefined && (typeof mes !== 'string' || !/^[0-9]{1,2}$/.test(mes) || Number(mes) < 1 || Number(mes) > 12))) {
+            return res.status(400).json({ error: 'Indicá un año y un mes válidos.' });
+        }
+        const fecha = new Date(0);
+        fecha.setUTCFullYear(anio === undefined ? ahora.getUTCFullYear() : Number(anio),
+            (mes === undefined ? ahora.getUTCMonth() + 1 : Number(mes)) - 1, 1);
         res.set('Cache-Control', 'no-store');
-        res.json(await metricasService.obtenerMetricasMensuales());
+        res.json(await metricasService.obtenerMetricasMensuales(fecha));
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'No se pudieron obtener las métricas del mes.' });
     }
 });
 
-app.get('/prompts', async (req, res) => {
+// Obtiene los promps del sistema
+app.get('/prompts/obtener', tieneSesion, async (req, res) => {
     try {
-        if (!await tieneSesion(req, res)) return;
         res.set('Cache-Control', 'no-store');
         res.json(await promptsService.listar());
     } catch (error) {
@@ -169,10 +160,11 @@ app.get('/prompts', async (req, res) => {
         res.status(500).json({ error: 'No se pudieron cargar los prompts.' });
     }
 });
-app.post('/prompts/:id', async (req, res) => {
+
+//sobre-escribe un prompt del sistema
+app.post('/prompts/guardar', tieneSesion, async (req, res) => {
     try {
-        if (!await tieneSesion(req, res)) return;
-        const prompt = await promptsService.guardar(req.params.id, req.body?.contenido, req.body?.version);
+        const prompt = await promptsService.guardar(req.body?.id, req.body?.contenido, req.body?.version);
         res.set('Cache-Control', 'no-store');
         res.json(prompt);
     } catch (error) {
@@ -181,19 +173,26 @@ app.post('/prompts/:id', async (req, res) => {
     }
 });
 
-app.get('/mensajes/:mensajeId/media/:tipo', async (req, res, next) => {
-    try {
-        if (!await tieneSesion(req, res)) return;
-        await archivosService.servirMedia(req, res, next);
-    } catch (error) { next(error); }
-});
+// Los usuarios habilitados del panel son los administradores; solo ellos pueden leer los archivos.
+const opcionesUploads = {
+    setHeaders: res => {
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+};
+app.use('/uploads/audio', tieneSesion, express.static(path.join(__dirname, 'uploads', 'audio'), opcionesUploads));
+app.use('/uploads/imagenes', tieneSesion, express.static(path.join(__dirname, 'uploads', 'imagenes'), opcionesUploads));
 
-// Registramos las rutas después del middleware de sesión.
+// Whatsapp usa esta ruta para enviar mensajes entrantes a nuestro servidor, y para verificar el webhook.
 app.post('/whatsapp/webhook', whatsappService.recibirMensajeWebhook);
+
+// Whatsapp usa esta ruta para verificar el webhook. Se envía un GET con un token de verificación.
 app.get('/whatsapp/webhook', whatsappService.configurarWebhook);
 
+
+
+//inicia mongo y el servidor http
 async function iniciar(){
-    if (!process.env.SESSION_SECRET) throw new Error('Falta definir SESSION_SECRET en las variables de entorno.');
     const mongo = await mongoService.connectDB();
 
     const PORT = process.env.PORT || 3000;

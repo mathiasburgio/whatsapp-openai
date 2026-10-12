@@ -5,35 +5,31 @@ const path = require('node:path');
 const { Module, createRequire } = require('node:module');
 const prompts = require('../services/prompts');
 const { detectar } = require('../services/promociones');
+const Conversacion = require('../models/conversacion');
 const reglas = [
-    { id: 'general', nombre: 'CORVEN', palabrasClave: ['Más info de CORVEN'], marca: 'Corven', modelo: null },
-    { id: 'modelo', nombre: 'CORVEN XXX', palabrasClave: ['Más info de CORVEN XXX', 'Quiero la CORVEN XXX'], marca: 'Corven', modelo: 'XXX' },
+    { id: 'general', nombre: 'CORVEN', palabrasClave: ['Más info de CORVEN'] },
+    { id: 'modelo', nombre: 'CORVEN XXX', palabrasClave: ['Más info de CORVEN XXX', 'Quiero la CORVEN XXX'] },
 ];
-test('detecta frases sin tildes ni mayúsculas y prioriza el modelo más específico', () => {
-    const origen = detectar({ contenidoOriginal: 'Hola! MAS info de corven XXX, por favor' }, reglas);
-    assert.equal(origen.promocionId, 'modelo');
-    assert.equal(origen.fuente, 'palabra_clave');
-    assert.equal(origen.marca, 'Corven');
-    assert.equal(origen.modelo, 'XXX');
-    assert.equal(detectar({ contenidoOriginal: 'Más info de CORVENas' }, reglas), null);
-    assert.equal(detectar({ contenidoOriginal: 'Hola', transcripcionImagen: 'Más info de CORVEN XXX' }, reglas), null);
-    assert.equal(detectar({ contenidoOriginal: 'Quiero la CORVEN XXX' }, reglas).promocionId, 'modelo');
+test('detecta frases sin tildes ni mayúsculas y conserva el texto recibido', () => {
+    assert.equal(detectar({ contenidoOriginal: 'Hola! MAS info de corven XXX, por favor' }, reglas), 'Hola! MAS info de corven XXX, por favor');
+    assert.equal(detectar({ contenidoOriginal: 'Más info de CORVENas' }, reglas), '');
+    assert.equal(detectar({ contenidoOriginal: 'Hola', transcripcionImagen: 'Más info de CORVEN XXX' }, reglas), '');
+    assert.equal(detectar({ contenidoOriginal: 'Quiero la CORVEN XXX' }, reglas), 'Quiero la CORVEN XXX');
 });
-test('distingue la referencia real de Meta de la coincidencia por palabras', () => {
-    const referral = { source_type: 'ad', source_id: '123', source_url: 'https://facebook.com/ad' };
-    const origen = detectar({ contenidoOriginal: 'Hola', crudo: { referral } }, reglas);
-    assert.equal(origen.fuente, 'meta');
-    assert.deepEqual(origen.referenciaMeta, referral);
-    assert.equal(origen.promocionId, null);
-    assert.equal(detectar({ contenidoOriginal: 'Más info de CORVEN', crudo: { referral } }, reglas).promocionId, 'general');
+test('conserva el texto del mensaje o el título de una referencia de Meta', () => {
+    const referral = { source_type: 'ad', source_id: '123', headline: 'Venta corven' };
+    assert.equal(detectar({ contenidoOriginal: 'Hola', crudo: { referral } }, reglas), 'Venta corven');
+    assert.equal(detectar({ contenidoOriginal: 'Más info de CORVEN', crudo: { referral } }, reglas), 'Más info de CORVEN');
 });
 test('marca solo el primer mensaje de la conversación y no cambia el origen después', async () => {
-    const conversacion = { _id: 'conv', origenInicializado: false };
-    let primero = { contenidoOriginal: 'Hola' }, lecturas = 0;
+    const conversacion = { _id: 'conv', origenPromocion: '' };
+    let primero = { _id: 'primero', contenidoOriginal: 'Hola' }, lecturas = 0, escrituras = 0;
     const filename = path.resolve(__dirname, '../services/promociones.js');
     const mocks = {
         '../models/conversacion': { findOneAndUpdate: async (query, update) => {
-            assert.deepEqual(query.origenInicializado, { $ne: true });
+            assert.deepEqual(query.origenPromocion, { $in: ['', null] });
+            assert.equal(typeof update.$set.origenPromocion, 'string');
+            escrituras++;
             Object.assign(conversacion, update.$set); return conversacion;
         } },
         '../models/mensaje': { findOne: query => { assert.equal(query.deClienteParaSistema, true); lecturas++; return { sort: async () => primero }; } },
@@ -42,15 +38,18 @@ test('marca solo el primer mensaje de la conversación y no cambia el origen des
     const modulo = new Module(filename), original = createRequire(filename);
     modulo.require = nombre => mocks[nombre] || original(nombre);
     modulo._compile(fs.readFileSync(filename, 'utf8'), filename);
-    await modulo.exports.registrar(conversacion, { contenidoOriginal: 'Más info de CORVEN XXX' });
-    assert.equal(conversacion.origenInicializado, true);
-    assert.equal(conversacion.origenPromocion, undefined);
-    primero = { contenidoOriginal: 'Más info de CORVEN XXX' };
+    await modulo.exports.registrar(conversacion, { _id: 'segundo', contenidoOriginal: 'Más info de CORVEN XXX' });
+    assert.equal(conversacion.origenPromocion, '');
+    assert.equal(escrituras, 0);
+    primero = { _id: 'primero', contenidoOriginal: 'Más info de CORVEN XXX' };
     await modulo.exports.registrar(conversacion, primero);
-    assert.equal(lecturas, 1);
-    conversacion.origenInicializado = false;
-    await modulo.exports.registrar(conversacion, primero);
-    assert.equal(conversacion.origenPromocion.modelo, 'XXX');
+    assert.equal(conversacion.origenPromocion, 'Más info de CORVEN XXX');
+    assert.equal(escrituras, 1);
+    assert.equal(lecturas, 2);
+    await modulo.exports.registrar(conversacion, { _id: 'otro', contenidoOriginal: 'Quiero la CORVEN XXX' });
+    assert.equal(conversacion.origenPromocion, 'Más info de CORVEN XXX');
+    assert.equal(escrituras, 1);
+    assert.equal(new Conversacion().origenPromocion, '');
 });
 test('valida reglas configurables y permite desactivar la detección con una lista vacía', () => {
     assert.deepEqual(prompts.validarPromociones('{"promociones":[]}'), []);

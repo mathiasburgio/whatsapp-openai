@@ -20,6 +20,7 @@ function validarContrasena(contrasena) {
     }
 }
 
+//crea un usuario, si llega contraseña la guarda/sobre-escribe. Si el usuario estaba deshabilitado lo rehabilita
 async function nuevo(email, contrasena) {
     const emailNormalizado = normalizarEmail(email);
     if (contrasena !== undefined) validarContrasena(contrasena);
@@ -39,6 +40,11 @@ async function nuevo(email, contrasena) {
     const hash = await bcrypt.hash(contrasena, 12);
     await Usuario.create({ email: emailNormalizado, contrasena: hash, habilitado: true });
     return { email: emailNormalizado, accion: 'creado' };
+}
+
+//sinonimo de "nuevo" (vease llama a "nuevo")
+async function habilitar(email, contrasena) {
+    return nuevo(email, contrasena);
 }
 
 async function deshabilitar(email) {
@@ -84,7 +90,8 @@ function cerrarSesion(req, res){
         req.session.destroy(error => {
             if (error) return res.status(500).json({ error: 'No se pudo cerrar sesión.' });
             res.clearCookie('whatsapp_openai_session');
-            res.json({ sesionActiva: false });
+            if(req.method === 'POST') return res.json({ sesionActiva: false });
+            else return res.redirect('/');
         });
     }catch(error){
         if(process.env.NODE_ENV === 'development') console.error(error);
@@ -99,6 +106,7 @@ module.exports = {
     deshabilitar,
     iniciarSesion,
     listar,
-    cerrarSesion
+    cerrarSesion,
+    habilitar //sinonimo de "nuevo"
 };
 

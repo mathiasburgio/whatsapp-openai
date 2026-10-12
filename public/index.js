@@ -15,7 +15,6 @@ let resolverDescartePrompt = null;
 let modoListado = 'ultimas';
 let solicitudConversaciones = 0;
 let enviandoMensaje = false;
-const solicitudesEnvio = new Map();
 const socket = io({ autoConnect: false });
 
 socket.on('connect', obtenerConversaciones);
@@ -28,7 +27,6 @@ socket.on('disconnect', motivo => {
         mensajes = [];
         limpiarMetricas();
         limpiarPrompts();
-        solicitudesEnvio.clear();
         actualizarControlBot();
         $('body').attr('data-estado', 'login');
     }
@@ -61,10 +59,10 @@ function recibirCambios({ conversacion, mensaje }) {
     }
 }
 
-function enviarPorSocket(conversacionId, contenido, solicitudId) {
+function enviarPorSocket(conversacionId, contenido) {
     return new Promise((resolve, reject) => {
         if (!socket.connected) return reject(new Error('No hay conexión con el servidor.'));
-        socket.timeout(30000).emit('enviar-mensaje', { conversacionId, contenido, solicitudId }, (error, respuesta) => {
+        socket.timeout(30000).emit('enviar-mensaje', { conversacionId, contenido }, (error, respuesta) => {
             if (error) return reject(new Error('No se pudo confirmar el envío.'));
             if (respuesta.error) {
                 if (respuesta.mensaje) recibirCambios({ mensaje: respuesta.mensaje });
@@ -84,7 +82,7 @@ async function iniciarSesion(){
     $('#btn-iniciar-sesion').prop('disabled', true);
     try{
         await $.post({
-            url: '/iniciar-sesion',
+            url: '/sesion/iniciar',
             contentType: 'application/json',
             data: JSON.stringify({
                 email: $('#email').val().trim().toLowerCase(),
@@ -104,7 +102,7 @@ async function iniciarSesion(){
 async function cerrarSesion(){
     $('#btn-cerrar-sesion').prop('disabled', true);
     try{
-        await $.post('/cerrar-sesion');
+        await $.post('/sesion/cerrar');
         solicitudConversaciones++;
         socket.disconnect();
         conversaciones = [];
@@ -119,7 +117,6 @@ async function cerrarSesion(){
         actualizarControlBot();
         limpiarMetricas();
         limpiarPrompts();
-        solicitudesEnvio.clear();
         $('body').attr('data-estado', 'login');
     }catch(error){
         Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudo cerrar sesión.' });
@@ -131,7 +128,7 @@ async function cerrarSesion(){
 async function obtenerConversaciones(){
     const solicitud = ++solicitudConversaciones;
     try{
-        const respuesta = await $.get('/conversaciones', { orden: modoListado });
+        const respuesta = await $.get('/conversaciones/obtener', { orden: modoListado });
         if (solicitud !== solicitudConversaciones) return;
         conversaciones = respuesta;
         listarConversaciones();
@@ -179,11 +176,7 @@ function actualizarControlBot() {
         ? 'Atención del vendedor: ' + (conversacionActual.motivoDerivacion || 'Consulta derivada.')
         : conversacionActual?.botActivo ? 'Respuestas automáticas habilitadas para los próximos mensajes.' : 'Al activarlo, el bot responderá a los próximos mensajes.');
     const origen = conversacionActual?.origenPromocion;
-    $('#origen-conversacion').prop('hidden', !origen).text(origen ? textoOrigen(origen) + (origen.palabraClave ? ' · ' + origen.palabraClave : '') : '');
-}
-
-function textoOrigen(origen) {
-    return (origen.fuente === 'meta' ? (origen.referenciaMeta?.source_type === 'ad' ? 'Anuncio de Meta' : 'Referencia de Meta') : 'Promoción por texto') + ' · ' + origen.nombre;
+    $('#origen-conversacion').prop('hidden', !origen).text(origen ? 'Texto asociado a promoción: ' + origen : '');
 }
 
 async function cambiarEstadoBot() {
@@ -193,8 +186,9 @@ async function cambiarEstadoBot() {
     guardandoBot = conversacion._id;
     $('#bot-activo').prop('disabled', true);
     try {
-        const actualizada = await $.post({ url: '/conversaciones/' + encodeURIComponent(conversacion._id) + '/bot',
-            contentType: 'application/json', data: JSON.stringify({ botActivo }) });
+        const accion = botActivo ? 'habilitar-bot' : 'deshabilitar-bot';
+        const actualizada = await $.post({ url: '/conversaciones/' + accion,
+            contentType: 'application/json', data: JSON.stringify({ conversacionId: conversacion._id }) });
         // Una respuesta tardía no debe cambiar la selección ni restaurar datos tras cerrar sesión.
         if (conversaciones.some(actual => actual._id === conversacion._id)) recibirCambios({ conversacion: actualizada });
     } catch (error) {
@@ -258,7 +252,7 @@ function listarConversaciones(){
         if (!(nombre + ' ' + telefono).toLowerCase().includes(buscar)) return '';
         const ultimoMensaje = conversacion.ultimoMensaje;
         const enviado = ultimoMensaje?.deSistemaParaCliente;
-        const estado = ultimoMensaje?.fechaLeida ? 'leido' : ultimoMensaje?.fechaEntrega ? 'entregado' : 'emitido';
+        const estado = ultimoMensaje?.fechaLeida ? 'leido' : ultimoMensaje?.fechaEntregada ? 'entregado' : 'emitido';
         const leadGuardado = conversacion.requiereAtencion ? 'derivación' : conversacion.intereses?.at(-1)?.lead?.toLowerCase();
         const lead = { frio: 'cold', frío: 'cold', cold: 'cold', tibio: 'warm', warm: 'warm',
             caliente: 'hot', hot: 'hot', derivación: 'handoff', derivacion: 'handoff', handoff: 'handoff' }[leadGuardado] || 'cold';
@@ -280,7 +274,7 @@ function listarConversaciones(){
                 </span>
                 <span class="tags-conversacion">
                     ${conversacion.requiereAtencion ? '<span class="badge tag lead-warm">Requiere vendedor</span>' : ''}
-                    ${conversacion.origenPromocion ? `<span class="badge tag origen-promocion" title="${escaparHtml(textoOrigen(conversacion.origenPromocion))}">${escaparHtml(conversacion.origenPromocion.nombre)} · ${conversacion.origenPromocion.fuente === 'meta' ? 'Meta' : 'por texto'}</span>` : ''}
+                    ${conversacion.origenPromocion ? `<span class="badge tag origen-promocion" title="Texto asociado a promoción">${escaparHtml(conversacion.origenPromocion)}</span>` : ''}
                     <span class="badge tag lead-${lead}">${lead}</span>
                     <span class="badge tag bot-${conversacion.botActivo ? 'activo' : 'inactivo'}">
                         <i class="fa-solid fa-circle" aria-hidden="true"></i>
@@ -315,7 +309,7 @@ async function obtenerMensajes(conversacionId, pagina = 0){
     cargandoMensajes = true;
     $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
     try{
-        const respuesta = await $.get('/mensajes', { conversacionId, pagina });
+        const respuesta = await $.get('/conversacion/mensajes', { conversacionId, pagina });
         if (conversacionActual?._id !== conversacionId) return;
         const altoAnterior = $('#mensajes')[0].scrollHeight;
         const posicionAnterior = $('#mensajes').scrollTop();
@@ -331,7 +325,7 @@ async function obtenerMensajes(conversacionId, pagina = 0){
     }finally{
         if (conversacionActual?._id === conversacionId) {
             cargandoMensajes = false;
-            $('#texto-mensaje').prop('disabled', false);
+            $('#texto-mensaje').prop('disabled', enviandoMensaje);
             $('#btn-enviar-mensaje').prop('disabled', enviandoMensaje || !socket.connected);
         }
     }
@@ -365,9 +359,9 @@ function listarMensajes(){
         }
         const media = fila.find('.mensaje-media');
         // Conserva los elementos multimedia al actualizar por socket, incluido el audio que está reproduciéndose.
-        for (const [tipo, presente] of [['imagen', mensaje.esImagen], ['audio', mensaje.esAudio]]) {
-            if (!presente || media.find('[data-media-tipo="' + tipo + '"]').length) continue;
-            const url = '/mensajes/' + encodeURIComponent(id) + '/media/' + tipo;
+        for (const [tipo, archivo] of [['imagen', mensaje.imagenArchivo], ['audio', mensaje.audioArchivo]]) {
+            if (!archivo || media.find('[data-media-tipo="' + tipo + '"]').length) continue;
+            const url = '/uploads/' + (tipo === 'imagen' ? 'imagenes' : 'audio') + '/' + encodeURIComponent(archivo);
             const bloque = $('<div>', { 'data-media-tipo': tipo });
             const elemento = tipo === 'audio'
                 ? $('<audio>', { controls: true, preload: 'none', src: url, 'aria-label': 'Reproducir audio del mensaje' })
@@ -395,12 +389,9 @@ function listarMensajes(){
             meta.append($('<time>', { datetime: fecha.toISOString(), title: fecha.toLocaleString('es-AR') })
                 .text(fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false })));
         }
-        if (enviado && mensaje.estadoEnvio && mensaje.estadoEnvio !== 'enviado') meta.append($('<span>', {
-            class: mensaje.estadoEnvio === 'enviando' ? '' : 'estado-envio-error',
-        }).text({ enviando: 'Enviando…', fallido: 'No enviado', envio_incierto: 'Envío sin confirmar' }[mensaje.estadoEnvio] || 'Pendiente'));
-        else if (enviado) meta.append($('<i>', {
-            class: 'fa-solid fa-check' + (mensaje.fechaLeida || mensaje.fechaEntrega ? '-double' : '') + (mensaje.fechaLeida ? ' estado-leido' : ''),
-            'aria-label': mensaje.fechaLeida ? 'Leído' : mensaje.fechaEntrega ? 'Entregado' : 'Enviado'
+        if (enviado && mensaje.fechaEmitida) meta.append($('<i>', {
+            class: 'fa-solid fa-check' + (mensaje.fechaLeida || mensaje.fechaEntregada ? '-double' : '') + (mensaje.fechaLeida ? ' estado-leido' : ''),
+            'aria-label': mensaje.fechaLeida ? 'Leído' : mensaje.fechaEntregada ? 'Entregado' : 'Enviado'
         }));
         if (contenedor.children[posicion] !== fila[0]) contenedor.insertBefore(fila[0], contenedor.children[posicion] || null);
     });
@@ -412,16 +403,10 @@ async function enviarMensaje(){
     const conversacion = conversacionActual;
     if (!conversacion || !contenido || enviandoMensaje || $('#btn-enviar-mensaje').prop('disabled')) return;
     if (contenido.length > 4096) { Swal.fire({ icon: 'error', text: 'El mensaje admite hasta 4096 caracteres.' }); return; }
-    let solicitud = solicitudesEnvio.get(conversacion._id);
-    if (!solicitud || solicitud.contenido !== contenido) {
-        solicitud = { contenido, id: crypto.randomUUID() };
-        solicitudesEnvio.set(conversacion._id, solicitud);
-    }
     enviandoMensaje = true;
-    $('#btn-enviar-mensaje').prop('disabled', true);
+    $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
     try{
-        const mensaje = await enviarPorSocket(conversacion._id, contenido, solicitud.id);
-        solicitudesEnvio.delete(conversacion._id);
+        const mensaje = await enviarPorSocket(conversacion._id, contenido);
         if (!conversaciones.some(c => c._id === conversacion._id)) return;
         if (conversacionActual?._id === conversacion._id) {
             recibirCambios({ mensaje });
@@ -433,11 +418,11 @@ async function enviarMensaje(){
         conversaciones = [conversacion, ...conversaciones.filter(c => c._id !== conversacion._id)];
         listarConversaciones();
     }catch(error){
-        if (error.mensaje?.estadoEnvio === 'fallido') solicitudesEnvio.delete(conversacion._id);
         if (error.status === 401) $('body').attr('data-estado', 'login');
         Swal.fire({ icon: 'error', text: error.message || 'No se pudo enviar el mensaje.' });
     }finally{
         enviandoMensaje = false;
+        $('#texto-mensaje').prop('disabled', !conversacionActual || cargandoMensajes);
         $('#btn-enviar-mensaje').prop('disabled', !conversacionActual || cargandoMensajes || !socket.connected);
     }
 }
@@ -448,8 +433,6 @@ function contenidoEditor() {
         id: fila.dataset.id,
         nombre: fila.querySelector('[data-campo="nombre"]').value.trim(),
         palabrasClave: fila.querySelector('[data-campo="palabrasClave"]').value.split('\n').map(frase => frase.trim()).filter(Boolean),
-        marca: fila.querySelector('[data-campo="marca"]').value.trim() || null,
-        modelo: fila.querySelector('[data-campo="modelo"]').value.trim() || null,
     }));
     return JSON.stringify({ promociones }, null, 2) + '\n';
 }
@@ -463,8 +446,6 @@ function agregarReglaPromocion(regla = {}) {
     $('#reglas-promociones').append(`<section class="regla-promocion" data-id="${escaparHtml(id)}">
         <label>Nombre de la promoción<input class="form-control" data-campo="nombre" maxlength="160" value="${escaparHtml(regla.nombre || '')}" placeholder="Ej. CORVEN XXX – Facebook"></label>
         <label>Frases para detectar (una por línea)<textarea class="form-control" data-campo="palabrasClave" rows="2" aria-label="Frases para detectar (una por línea)" placeholder="Más info de CORVEN XXX">${escaparHtml((regla.palabrasClave || []).join('\n'))}</textarea></label>
-        <div class="filtros"><label>Marca (opcional)<input class="form-control" data-campo="marca" maxlength="80" value="${escaparHtml(regla.marca || '')}"></label>
-        <label>Modelo (opcional)<input class="form-control" data-campo="modelo" maxlength="80" value="${escaparHtml(regla.modelo || '')}"></label></div>
         <button type="button" class="btn btn-outline-danger btn-sm mt-3" data-eliminar-promocion>Eliminar promoción</button>
     </section>`);
 }
@@ -506,7 +487,7 @@ async function cargarPrompts() {
     $('#prompt-estado').text('Cargando…');
     $('#prompt-selector, #prompt-contenido, #btn-guardar-prompt').prop('disabled', true);
     try {
-        const lista = await $.get('/prompts');
+        const lista = await $.get('/prompts/obtener');
         if (solicitud !== solicitudPrompts) return;
         promptsDisponibles = lista;
         $('#prompt-selector').html(lista.map(item => `<option value="${escaparHtml(item.id)}">${escaparHtml(item.nombre)}</option>`).join('')).prop('disabled', false);
@@ -547,8 +528,8 @@ async function guardarPrompt() {
     $('#modal-prompts input, #modal-prompts textarea, #modal-prompts select, #modal-prompts button').prop('disabled', true);
     $('#prompt-estado').text('Guardando…');
     try {
-        const actualizado = await $.post({ url: '/prompts/' + encodeURIComponent(actual.id), contentType: 'application/json',
-            data: JSON.stringify({ contenido, version: actual.version }) });
+        const actualizado = await $.post({ url: '/prompts/guardar', contentType: 'application/json',
+            data: JSON.stringify({ id: actual.id, contenido, version: actual.version }) });
         if (solicitud !== solicitudPrompts) return;
         Object.assign(actual, actualizado);
         contenidoInicialPrompt = contenido;
@@ -605,8 +586,8 @@ $('#mensajes').on('scroll', () => {
     }
 });
 
-$.get('/verificar-sesion').then(r => {
-    if (r.sesionActiva) {
+$.get('/sesion/activa').then(activa => {
+    if (activa) {
         $('body').attr('data-estado', 'conversacion');
         socket.connect();
     }

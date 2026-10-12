@@ -18,14 +18,11 @@ const esquemas = {
 
 async function contexto(conversacion, mensaje) {
     const recientes = await Mensaje.find({ conversacionId: conversacion._id, $or: [
-        { deSistemaParaCliente: { $ne: true } }, { estadoEnvio: { $exists: false } }, { estadoEnvio: 'enviado' },
+        { deSistemaParaCliente: { $ne: true } }, { whatsappId: { $type: 'string' } },
     ] }).sort({ createdAt: -1, _id: -1 }).limit(12);
     const datos = {
         resumenAnterior: (conversacion.resumen || '').slice(0, 4000),
-        origenPromocion: conversacion.origenPromocion ? {
-            fuente: conversacion.origenPromocion.fuente, nombre: conversacion.origenPromocion.nombre,
-            marca: conversacion.origenPromocion.marca, modelo: conversacion.origenPromocion.modelo,
-        } : null,
+        origenPromocion: conversacion.origenPromocion || '',
         buscarVehiculoDisponible: vehiculos.disponible(),
         mensajeActualId: String(mensaje._id),
         mensajes: recientes.reverse().map(item => ({ id: String(item._id),
@@ -57,24 +54,14 @@ function validarDecision(decision) {
 async function derivar(conversacionId, motivo) {
     return Conversacion.findOneAndUpdate({ _id: conversacionId }, {
         $set: { botActivo: false, requiereAtencion: true, motivoDerivacion: motivo.slice(0, 1000) },
-        $inc: { revisionBot: 1 },
         $push: { notificacion: { lead: 'derivación', resumen: motivo.slice(0, 1000), creada: new Date(), aceptada: false } },
     }, { returnDocument: 'after' });
 }
-function habilitado(conversacion, mensaje) {
-    return !!conversacion?.botActivo && (conversacion.revisionBot || 0) === (mensaje.revisionBot || 0);
-}
-async function verificarLimite() {
-    const limite = Number(process.env.WHATSAPP_MONTHLY_RESPONSE_LIMIT || 2000);
-    if (!Number.isSafeInteger(limite) || limite < 0) throw new Error('Límite mensual de respuestas inválido.');
-    const ahora = new Date();
-    const inicio = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1));
-    const cantidad = await Mensaje.countDocuments({ respuestaAutomatica: true, deSistemaParaCliente: true,
-        whatsappId: { $type: 'string' }, fechaEmitida: { $gte: inicio } });
-    if (cantidad >= limite) throw new Error('Se alcanzó el límite mensual de respuestas automáticas.');
+function habilitado(conversacion) {
+    return !!conversacion?.botActivo;
 }
 async function responder(mensaje) {
-    if (!['pendiente', 'fallido'].includes(mensaje.estadoBot) || mensaje.estadoProcesamiento !== 'completado') return;
+    if (!['pendiente', 'fallido'].includes(mensaje.estadoBot)) return;
     // Reclamo atómico: los reintentos del webhook no vuelven a enviar una respuesta.
     const tomado = await Mensaje.findOneAndUpdate({ _id: mensaje._id, estadoBot: { $in: ['pendiente', 'fallido'] } },
         { $set: { estadoBot: 'procesando' }, $unset: { errorBot: '' } }, { returnDocument: 'after' });
@@ -87,7 +74,7 @@ async function responder(mensaje) {
     let salida;
     try {
         let conversacion = await Conversacion.findById(mensaje.conversacionId);
-        if (!habilitado(conversacion, mensaje)) { mensaje.estadoBot = 'omitido'; return; }
+        if (!habilitado(conversacion)) { mensaje.estadoBot = 'omitido'; return; }
         const configuracion = await prompts.cargar();
         const datos = await contexto(conversacion, mensaje);
         async function consultar(etapa, entrada, maxTokensSalida) {
@@ -95,7 +82,8 @@ async function responder(mensaje) {
             try {
                 respuesta = await openai.procesarTexto(JSON.stringify(entrada), {
                     instrucciones: prompts.instrucciones(configuracion, etapa),
-                    esquema: { nombre: etapa, schema: esquemas[etapa] }, conversacionId: conversacion._id, maxTokensSalida,
+                    esquema: { nombre: etapa, schema: esquemas[etapa] }, conversacionId: conversacion._id,
+                    mensajeId: mensaje._id, maxTokensSalida,
                 });
             } catch (error) {
                 for (const campo of Object.keys(tokens)) tokens[campo] += error.tokensGastados?.[campo] || 0;
@@ -106,7 +94,7 @@ async function responder(mensaje) {
         }
         const decision = await consultar('orquestador', datos, 600);
         validarDecision(decision);
-        if (!habilitado(await Conversacion.findById(mensaje.conversacionId), mensaje)) { mensaje.estadoBot = 'omitido'; return; }
+        if (!habilitado(await Conversacion.findById(mensaje.conversacionId))) { mensaje.estadoBot = 'omitido'; return; }
         let catalogo = { estado: 'no_consultado', vehiculos: [] };
         if (decision.accion === 'buscar_vehiculo') {
             try { catalogo = await vehiculos.buscar(decision.filtro); }
@@ -124,8 +112,8 @@ async function responder(mensaje) {
         await envios.serializar(async () => {
             // Revisa el interruptor justo antes del envío, incluso si cambió durante las llamadas a IA.
             conversacion = await Conversacion.findById(mensaje.conversacionId);
-            if (!habilitado(conversacion, mensaje)) { mensaje.estadoBot = 'omitido'; return; }
-            await verificarLimite();
+            if (!habilitado(conversacion)) { mensaje.estadoBot = 'omitido'; return; }
+            await envios.verificarLimiteMensual();
             mensaje.estadoBot = 'enviando';
             await mensaje.save();
             envioIniciado = true;
@@ -138,7 +126,7 @@ async function responder(mensaje) {
                 respuestaAutomatica: true, deSistemaParaCliente: true, deClienteParaSistema: false,
                 emisor: mensaje.receptor, receptor: conversacion.telefono, contenido: respuesta.mensaje.trim(),
                 mediaPhoneNumberId: mensaje.mediaPhoneNumberId,
-                usoLLM: true, estadoProcesamiento: 'completado', fechaEmitida: new Date(), crudo });
+                usoLLM: true, fechaEmitida: new Date(), crudo });
             mensaje.estadoBot = decision.accion === 'notify_seller' ? 'derivado' : 'respondido';
             await Conversacion.updateOne({ _id: conversacion._id }, {
                 $set: { deClienteParaSistema: false, ultimoMensaje: salida.toObject() }, $inc: { turnosDesdeResumen: 1 },
@@ -160,7 +148,7 @@ async function responder(mensaje) {
     } catch (error) {
         mensaje.estadoBot = envioIniciado && !error.envioNoIniciado ? (envioAceptado ? 'respondido' : 'envio_incierto') : 'fallido';
         mensaje.errorBot = error.message;
-        if (envioIniciado || habilitado(await Conversacion.findById(mensaje.conversacionId), mensaje)) await derivar(mensaje.conversacionId, error.message);
+        if (envioIniciado || habilitado(await Conversacion.findById(mensaje.conversacionId))) await derivar(mensaje.conversacionId, error.message);
         else mensaje.estadoBot = 'omitido';
         console.error('No se pudo completar la respuesta automática:', error.message);
     } finally {

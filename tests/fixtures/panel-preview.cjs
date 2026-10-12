@@ -19,7 +19,7 @@ async function iniciar() {
     const prompts = modulo.exports;
     const entrada = { _id: '507f1f77bcf86cd799439012', conversacionId: '507f1f77bcf86cd799439011',
         contenidoOriginal: 'Más info de CORVEN XXX', contenido: 'Más info de CORVEN XXX', deClienteParaSistema: true,
-        estadoProcesamiento: 'completado', fechaEmitida: new Date().toISOString() };
+        fechaEmitida: new Date().toISOString() };
     const conversacion = { _id: entrada.conversacionId, nombre: 'Cliente de prueba', telefono: '5491100000000', botActivo: false,
         requiereAtencion: true, motivoDerivacion: 'Necesita confirmar precio con el vendedor.', updatedAt: '2026-01-01T00:00:00Z',
         origenPromocion: detectar(entrada, prompts.validarPromociones((await prompts.leer('promociones')).contenido)), ultimoMensaje: entrada };
@@ -31,32 +31,32 @@ async function iniciar() {
     const app = express();
     const servidor = http.createServer(app), io = new Server(servidor);
     app.use(express.json());
-    app.get('/verificar-sesion', (req, res) => res.json({ sesionActiva: true }));
-    app.get('/conversaciones', (req, res) => res.json(conversaciones.filter(item => req.query.orden !== 'pendientes' || item.requiereAtencion || item.ultimoMensaje.deClienteParaSistema)));
-    app.get('/mensajes', (req, res) => res.json(mensajes.filter(item => item.conversacionId === req.query.conversacionId).slice().reverse()));
-    app.post('/conversaciones/:id/bot', (req, res) => {
-        const actual = conversaciones.find(item => item._id === req.params.id);
-        actual.botActivo = req.body.botActivo;
+    app.get('/sesion/activa', (req, res) => res.json(true));
+    app.get('/conversaciones/obtener', (req, res) => res.json(conversaciones.filter(item => req.query.orden !== 'pendientes' || item.requiereAtencion || item.ultimoMensaje.deClienteParaSistema)));
+    app.get('/conversacion/mensajes', (req, res) => res.json(mensajes.filter(item => item.conversacionId === req.query.conversacionId).slice().reverse()));
+    function cambiarEstadoBot(botActivo) { return (req, res) => {
+        const actual = conversaciones.find(item => item._id === req.body.conversacionId);
+        actual.botActivo = botActivo;
         io.emit('cambios', { conversacion: actual }); res.json(actual);
-    });
+    }; }
+    app.post('/conversaciones/habilitar-bot', cambiarEstadoBot(true));
+    app.post('/conversaciones/deshabilitar-bot', cambiarEstadoBot(false));
     io.on('connection', socket => socket.on('enviar-mensaje', (datos, responder) => {
         const actual = conversaciones.find(item => item._id === datos.conversacionId);
-        const existente = mensajes.find(item => item.solicitudEnvioId === datos.solicitudId);
-        if (existente) return responder({ mensaje: existente });
         const mensaje = { _id: 'preview-' + mensajes.length, conversacionId: actual._id, contenido: datos.contenido,
-            deSistemaParaCliente: true, respuestaAutomatica: false, solicitudEnvioId: datos.solicitudId, estadoEnvio: 'enviado',
+            deSistemaParaCliente: true, respuestaAutomatica: false,
             whatsappId: 'wamid.preview.' + mensajes.length, fechaEmitida: new Date().toISOString() };
         mensajes.push(mensaje);
         Object.assign(actual, { botActivo: false, requiereAtencion: false, motivoDerivacion: '', ultimoMensaje: mensaje, updatedAt: mensaje.fechaEmitida });
         io.emit('cambios', { conversacion: actual, mensaje }); responder({ mensaje });
     }));
-    app.post('/cerrar-sesion', (req, res) => res.json({ ok: true }));
+    app.post('/sesion/cerrar', (req, res) => res.json({ ok: true }));
     app.get('/metricas/mes', (req, res) => res.json({ periodo: { inicio: '2026-10-01T00:00:00Z' },
         llamadasWebSearch: 2, llamadasProcesarTexto: 8, segundosProcesados: 30, tokensProcesados: 12345, imagenesProcesadas: 3,
         respuestasAutomaticas: 4, tokensEntrada: 12000, tokensSalida: 345 }));
-    app.get('/prompts', async (req, res) => res.json(await prompts.listar()));
-    app.post('/prompts/:id', async (req, res) => {
-        try { res.json(await prompts.guardar(req.params.id, req.body.contenido, req.body.version)); }
+    app.get('/prompts/obtener', async (req, res) => res.json(await prompts.listar()));
+    app.post('/prompts/guardar', async (req, res) => {
+        try { res.json(await prompts.guardar(req.body.id, req.body.contenido, req.body.version)); }
         catch (error) { res.status(error.status || 500).json({ error: error.message }); }
     });
     app.use(express.static(path.join(root, 'public')));

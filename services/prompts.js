@@ -38,13 +38,12 @@ function validarPromociones(contenido) {
     if (!datos || Object.keys(datos).length !== 1 || !Array.isArray(datos.promociones) || datos.promociones.length > 100) throw error('Usá un objeto con un array promociones de hasta 100 reglas.', 400);
     const ids = new Set();
     for (const regla of datos.promociones) {
-        if (!regla || Object.keys(regla).some(campo => !['id', 'nombre', 'palabrasClave', 'marca', 'modelo'].includes(campo))
+        if (!regla || Object.keys(regla).some(campo => !['id', 'nombre', 'palabrasClave'].includes(campo))
             || typeof regla.id !== 'string' || !/^[a-z0-9_-]{1,80}$/.test(regla.id) || ids.has(regla.id)
             || typeof regla.nombre !== 'string' || !regla.nombre.trim() || regla.nombre.length > 160
             || !Array.isArray(regla.palabrasClave) || !regla.palabrasClave.length || regla.palabrasClave.length > 30
-            || regla.palabrasClave.some(frase => typeof frase !== 'string' || !/[\p{L}\p{N}]/u.test(frase) || frase.length > 200)
-            || ['marca', 'modelo'].some(campo => regla[campo] !== null && (typeof regla[campo] !== 'string' || !regla[campo].trim() || regla[campo].length > 80))) {
-            throw error('Promoción inválida: revisá id único, nombre, palabrasClave, marca y modelo (texto o null).', 400);
+            || regla.palabrasClave.some(frase => typeof frase !== 'string' || !/[\p{L}\p{N}]/u.test(frase) || frase.length > 200)) {
+            throw error('Promoción inválida: revisá id único, nombre y palabrasClave.', 400);
         }
         ids.add(regla.id);
     }
