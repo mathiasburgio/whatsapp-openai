@@ -60,6 +60,7 @@ test('el login limita intentos y las rutas usan la nueva conversación', async (
             recibirMensajeWebhook() {}, configurarWebhook() {},
         },
         './services/orquestador': {}, './services/mongo': {}, './services/metricas': {}, './services/prompts': {},
+        './services/bot': { cancelarEspera: async () => {} },
         './services/sockets': { inicializar() {} },
         './services/usuarios': {
             iniciarSesion: (req, res) => { loginCalls++; res.json({ sesionActiva: true }); }, cerrarSesion() {},

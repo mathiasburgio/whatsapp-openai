@@ -89,9 +89,12 @@
         .barra-panel { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--borde); }
         .titulo-panel { flex: 1; margin: 0; font-size: 16px; font-weight: 600; }
         .barra-panel .btn { min-height: 40px; font-size: 13px; }
-        .control-bot { margin-top: 10px; font-size: 13px; }
+        .control-bot { margin: 0; padding: 9px 12px; border: 1px solid #cbd5da; border-radius: 8px; background: #e9edef; font-size: 14px; }
+        .control-bot[data-activo="true"] { background: #def2e8; border-color: #91c9ac; color: #267553; }
+        .control-bot .form-check { display: flex; align-items: center; gap: 10px; margin: 0; padding: 0; }
+        .control-bot .form-check-input { float: none; width: 44px; height: 24px; margin: 0; cursor: pointer; }
         .control-bot .form-check-input:checked { background-color: var(--verde); border-color: var(--verde); }
-        .control-bot small { display: block; margin-top: 4px; color: var(--secundario); font-size: 11px; }
+        .control-bot .form-check-label { font-weight: 600; cursor: pointer; }
         .metricas-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
         .metrica { margin: 0; padding: 16px; background: var(--superficie); border-radius: 8px; }
         .metrica dt { color: var(--secundario); font-size: 13px; font-weight: 500; }
@@ -106,6 +109,8 @@
         .metricas-modal .modal-footer { flex-shrink: 0; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--borde); }
         #modal-prompts { width: min(940px, calc(100% - 24px)); }
         #modal-descartar-prompts { width: min(460px, calc(100% - 24px)); }
+        #modal-mensaje { width: min(940px, calc(100% - 24px)); }
+        #mensaje-json { margin: 0; padding: 16px; border-radius: 6px; background: var(--superficie); font: 13px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
         #prompt-contenido { min-height: 300px; height: 40dvh; resize: vertical; font-size: 14px; line-height: 1.55; }
 
         .buscador { padding: 16px; border-bottom: 1px solid var(--borde); }
@@ -152,8 +157,16 @@
         .tag .fa-circle { margin-right: 4px; font-size: 6px; vertical-align: 2px; }
 
         .panel-conversacion { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-        .cabecera-conversacion { min-height: 73px; padding: 14px 28px; border-bottom: 1px solid var(--borde); background: var(--superficie); }
-        .cabecera-conversacion .telefono-contacto { font-size: 13px; }
+        .cabecera-conversacion { flex-shrink: 0; padding: 12px 20px; border-bottom: 1px solid var(--borde); background: var(--superficie); }
+        .cabecera-principal { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+        .contacto-cabecera { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; min-width: 0; overflow-wrap: anywhere; }
+        .cabecera-conversacion .telefono-contacto { margin-top: 0; font-size: 13px; }
+        .contexto-cabecera { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .contexto-item { flex: 1 1 260px; min-width: 0; padding: 8px 12px; border: 1px solid #d8dfe3; border-radius: 6px; background: #fff; }
+        .contexto-item strong { display: block; margin-bottom: 4px; color: var(--secundario); font-size: 11px; }
+        .contexto-item p { margin: 0; max-height: 50px; overflow-y: auto; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; line-height: 1.4; }
+        .contexto-atencion { border-color: #efd7a2; background: #fff8e8; }
+        .contexto-atencion strong { color: #855711; }
         .mensajes {
             display: flex;
             flex: 1;
@@ -206,8 +219,10 @@
             .telefono-contacto { font-size: 11px; overflow-wrap: anywhere; }
             .estado-mensaje { gap: 4px; font-size: 10px; }
             .tag { padding: 4px 6px; font-size: 10px; }
-            .cabecera-conversacion { min-height: 65px; padding: 13px 14px; }
+            .cabecera-conversacion { padding: 10px 12px; }
             .cabecera-conversacion .telefono-contacto { font-size: 11px; }
+            .control-bot { width: 100%; }
+            .contexto-item { flex-basis: 100%; }
             .mensajes { gap: 10px; padding: 20px 12px; }
             .mensaje { max-width: 96%; padding: 8px 10px 5px; font-size: 13px; }
             .compositor { flex-wrap: wrap; gap: 8px; padding: 12px; }
@@ -228,6 +243,10 @@
             <div class="mb-4">
                 <label for="contrasena" class="form-label">Contraseña</label>
                 <input id="contrasena" name="contrasena" type="password" class="form-control" autocomplete="current-password" required>
+                <div class="form-check mt-2">
+                    <input id="mostrar-contrasena" type="checkbox" class="form-check-input" aria-controls="contrasena">
+                    <label for="mostrar-contrasena" class="form-check-label small">Mostrar contraseña</label>
+                </div>
             </div>
             <button id="btn-iniciar-sesion" class="btn btn-enviar w-100" type="submit">Iniciar sesión</button>
         </form>
@@ -258,14 +277,27 @@
 
         <section class="panel-conversacion" aria-label="Conversación seleccionada">
             <header class="cabecera-conversacion">
-                <span id="nombre-conversacion" class="nombre-contacto">Seleccioná una conversación</span>
-                <span id="telefono-conversacion" class="telefono-contacto"></span>
-                <div class="control-bot">
-                    <div class="form-check form-switch">
-                        <input id="bot-activo" class="form-check-input" type="checkbox" role="switch" disabled>
-                        <label id="estado-bot" class="form-check-label" for="bot-activo">Bot inactivo</label>
+                <div class="cabecera-principal">
+                    <div class="contacto-cabecera">
+                        <span id="nombre-conversacion" class="nombre-contacto">Seleccioná una conversación</span>
+                        <span id="telefono-conversacion" class="telefono-contacto"></span>
                     </div>
-                    <small id="bot-detalle">Al activarlo, el bot responderá a los próximos mensajes.</small>
+                    <div class="control-bot" data-activo="false">
+                        <div class="form-check form-switch">
+                            <input id="bot-activo" class="form-check-input" type="checkbox" role="switch" disabled>
+                            <label id="estado-bot" class="form-check-label" for="bot-activo">Bot inactivo</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="contexto-cabecera">
+                    <section id="atencion-vendedor" class="contexto-item contexto-atencion" hidden>
+                        <strong>Atención del vendedor</strong>
+                        <p id="motivo-vendedor"></p>
+                    </section>
+                    <section class="contexto-item">
+                        <strong>Resumen de la conversación</strong>
+                        <p id="resumen-conversacion">Seleccioná una conversación.</p>
+                    </section>
                 </div>
             </header>
 
@@ -278,6 +310,19 @@
             </div>
         </section>
     </main>
+
+    <dialog class="metricas-modal" id="modal-mensaje" aria-labelledby="titulo-mensaje">
+        <div class="modal-header">
+            <h2 id="titulo-mensaje" class="modal-title fs-5">Detalle del mensaje</h2>
+            <button type="button" class="btn-close" data-cerrar-mensaje aria-label="Cerrar detalle"></button>
+        </div>
+        <div class="modal-body">
+            <pre id="mensaje-json"></pre>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-cerrar-mensaje>Cerrar</button>
+        </div>
+    </dialog>
 
     <dialog class="metricas-modal" id="modal-metricas" aria-labelledby="titulo-metricas">
                 <div class="modal-header">
@@ -335,6 +380,6 @@
     <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/index.js?v=prompts-vendedor-4"></script>
+    <script src="/index.js?v=panel-detalle-5"></script>
 </body>
 </html>

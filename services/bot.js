@@ -5,6 +5,7 @@ const prompts = require('./prompts');
 const vehiculos = require('./vehiculos');
 const sockets = require('./sockets');
 const envios = require('./envios');
+const colaMensajes = require('./colaMensajes');
 
 const objeto = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const filtroSchema = objeto({
@@ -20,7 +21,7 @@ const esquemas = {
     resumen: objeto({ resumen: { type: 'string' } }),
 };
 
-async function contexto(conversacion, mensaje) {
+async function contexto(conversacion, mensaje, grupo = [mensaje]) {
     const recientes = await Mensaje.find({ conversacionId: conversacion._id, $or: [
         { deSistemaParaCliente: { $ne: true } }, { whatsappId: { $type: 'string' } },
     ] }).sort({ createdAt: -1, _id: -1 }).limit(12);
@@ -28,6 +29,11 @@ async function contexto(conversacion, mensaje) {
         resumenAnterior: (conversacion.resumen || '').slice(0, 4000),
         buscarVehiculoDisponible: vehiculos.disponible(),
         mensajeActualId: String(mensaje._id),
+        mensajeActual: grupo.map(item => [
+            item.contenidoOriginal ?? (item.esImagen || item.esAudio ? '' : item.contenido),
+            item.transcripcionAudio && 'Transcripción del audio: ' + item.transcripcionAudio,
+            item.transcripcionImagen && 'Descripción de imagen: ' + item.transcripcionImagen,
+        ].filter(Boolean).join('\n')).join('\n').slice(-12000),
         mensajes: recientes.reverse().map(item => ({ id: String(item._id),
             autor: item.deSistemaParaCliente ? 'asistente' : 'cliente',
             texto: (item.contenidoOriginal ?? (item.esImagen || item.esAudio ? '' : item.contenido) ?? '').slice(0, 700),
@@ -57,7 +63,17 @@ async function derivar(conversacionId, motivo) {
 function habilitado(conversacion) {
     return !!conversacion?.botActivo;
 }
-async function responder(mensaje) {
+function encolar(mensaje) {
+    colaMensajes.agregar(mensaje, responder);
+}
+async function cancelarEspera(conversacionId) {
+    for (const mensaje of colaMensajes.cancelar(conversacionId)) {
+        await Mensaje.updateOne({ _id: mensaje._id, estadoBot: 'pendiente' }, { $set: { estadoBot: 'omitido' } });
+        if (mensaje.estadoBot === 'pendiente') mensaje.estadoBot = 'omitido';
+        await sockets.notificarCambios(await Conversacion.findById(conversacionId), mensaje);
+    }
+}
+async function responder(mensaje, grupo = [mensaje], control = {}) {
     if (!['pendiente', 'fallido'].includes(mensaje.estadoBot)) return;
     // Reclamo atómico: los reintentos del webhook no vuelven a enviar una respuesta.
     const tomado = await Mensaje.findOneAndUpdate({ _id: mensaje._id, estadoBot: { $in: ['pendiente', 'fallido'] } },
@@ -69,11 +85,17 @@ async function responder(mensaje) {
     let envioIniciado = false;
     let envioAceptado = false;
     let salida;
+    function continuar(conversacion) {
+        if (!habilitado(conversacion) || control.cancelada?.()) { mensaje.estadoBot = 'omitido'; return false; }
+        if (control.vigente && !control.vigente()) { mensaje.estadoBot = 'pendiente'; return false; }
+        return true;
+    }
     try {
         let conversacion = await Conversacion.findById(mensaje.conversacionId);
-        if (!habilitado(conversacion)) { mensaje.estadoBot = 'omitido'; return; }
+        if (!continuar(conversacion)) return;
         const configuracion = await prompts.cargar();
-        const datos = await contexto(conversacion, mensaje);
+        const datos = await contexto(conversacion, mensaje, grupo);
+        if (!continuar(conversacion)) return;
         async function consultar(etapa, entrada, maxTokensSalida) {
             let respuesta;
             try {
@@ -91,7 +113,7 @@ async function responder(mensaje) {
         }
         const decision = await consultar('orquestador', datos, 600);
         validarDecision(decision);
-        if (!habilitado(await Conversacion.findById(mensaje.conversacionId))) { mensaje.estadoBot = 'omitido'; return; }
+        if (!continuar(await Conversacion.findById(mensaje.conversacionId))) return;
         let catalogo = { estado: 'no_consultado', vehiculos: [] };
         if (decision.accion === 'buscar_vehiculo') {
             try { catalogo = await vehiculos.buscar(decision.filtro); }
@@ -109,10 +131,12 @@ async function responder(mensaje) {
         await envios.serializar(async () => {
             // Revisa el interruptor justo antes del envío, incluso si cambió durante las llamadas a IA.
             conversacion = await Conversacion.findById(mensaje.conversacionId);
-            if (!habilitado(conversacion)) { mensaje.estadoBot = 'omitido'; return; }
+            if (!continuar(conversacion)) return;
             await envios.verificarLimiteMensual();
+            if (!continuar(conversacion)) return;
             mensaje.estadoBot = 'enviando';
             await mensaje.save();
+            if (!continuar(conversacion)) return;
             envioIniciado = true;
             const crudo = await require('./whatsapp').enviarMensaje({ to: conversacion.telefono, text: respuesta.mensaje.trim(),
                 phoneNumberId: mensaje.mediaPhoneNumberId, replyToMessageId: mensaje.whatsappId });
@@ -142,7 +166,7 @@ async function responder(mensaje) {
             conversacion = await Conversacion.findById(conversacion._id);
             const cada = Number(process.env.BOT_RESUMEN_CADA_TURNOS || 5);
             if (Number.isSafeInteger(cada) && cada > 0 && conversacion.turnosDesdeResumen >= cada) {
-                const memoria = await consultar('resumen', await contexto(conversacion, mensaje), 1300);
+                const memoria = await consultar('resumen', await contexto(conversacion, mensaje, grupo), 1300);
                 if (typeof memoria?.resumen !== 'string' || !memoria.resumen.trim() || memoria.resumen.length > 4000) throw new Error('Resumen inválido.');
                 await Conversacion.updateOne({ _id: conversacion._id }, { $set: { resumen: memoria.resumen, turnosDesdeResumen: 0 } });
             }
@@ -160,7 +184,14 @@ async function responder(mensaje) {
         await Conversacion.updateOne({ _id: mensaje.conversacionId }, { $inc: Object.fromEntries(
             Object.entries(tokens).map(([campo, valor]) => ['tokens.' + campo, valor])) });
         await sockets.notificarCambios(await Conversacion.findById(mensaje.conversacionId), mensaje);
+        if (mensaje.estadoBot !== 'pendiente') {
+            for (const anterior of grupo.filter(item => String(item._id) !== String(mensaje._id))) {
+                anterior.estadoBot = mensaje.estadoBot === 'omitido' ? 'omitido' : 'agrupado';
+                await anterior.save();
+                await sockets.notificarCambios(await Conversacion.findById(mensaje.conversacionId), anterior);
+            }
+        }
     }
     return salida;
 }
-module.exports = { responder };
+module.exports = { responder, encolar, cancelarEspera };

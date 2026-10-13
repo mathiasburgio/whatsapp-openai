@@ -1,4 +1,4 @@
-Elegí la próxima acción para atender el mensaje actual identificado por mensajeActualId, considerando el resumen y los últimos mensajes. No redactes aquí la respuesta final.
+Elegí la próxima acción para atender mensajeActual, que reúne los mensajes enviados por el cliente durante la espera. Interpretalos como una sola consulta y atendé todas sus preguntas, considerando el resumen y los últimos mensajes. mensajeActualId identifica el último mensaje del bloque. No redactes aquí la respuesta final.
 
 Acciones disponibles:
 - buscar_vehiculo: consultas sobre vehículos a la venta, características, precio o disponibilidad. Si buscarVehiculoDisponible es true y podés identificar al menos uno de los filtros permitidos, elegí buscar_vehiculo antes de decidir una derivación por falta de información comercial. Preguntar "tenés", "estoy buscando" o "en qué precio" es una consulta al catálogo.

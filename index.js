@@ -17,6 +17,7 @@ const orquestadorService = require('./services/orquestador');
 const socketsService = require('./services/sockets');
 const mongoService = require('./services/mongo');
 const usuarioService = require('./services/usuarios');
+const botService = require('./services/bot');
 
 const cUsuarios = require('./models/usuarios');
 const cConversaciones = require('./models/conversacion');
@@ -118,6 +119,7 @@ function cambiarEstadoBot(botActivo) {
             const conversacion = await cConversaciones.findOneAndUpdate({ _id: conversacionId },
                 { $set: { botActivo } }, { returnDocument: 'after', runValidators: true });
             if (!conversacion) return res.status(404).json({ error: 'Conversación no encontrada.' });
+            if (!botActivo) await botService.cancelarEspera(conversacionId);
             await socketsService.notificarCambios(conversacion);
             res.json(conversacion);
         } catch (error) {

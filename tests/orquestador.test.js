@@ -48,7 +48,7 @@ function preparar(t, servicios = {}) {
         },
         './openai': servicios.openai || { procesarImagen: async () => assert.fail('El texto no consume OpenAI'),
             transcribirAudio: async () => assert.fail('El texto no consume OpenAI') },
-        './bot': { responder: async mensaje => { assert.equal(mensaje.estadoBot, 'omitido'); } },
+        './bot': servicios.bot || { encolar: mensaje => { assert.equal(mensaje.estadoBot, 'omitido'); }, cancelarEspera: async () => {} },
         './prompts': { cargar: async () => ({ imagen: 'Describí con incertidumbre.', audio: 'Transcribí motos.' }) },
         './envios': {
             serializar: require('../services/envios').serializar,
@@ -166,6 +166,26 @@ test('reintentos concurrentes no duplican mensajes, conversación ni consumo de 
     assert.equal(conversaciones[0].ultimoMensaje.contenido, 'Hola');
 });
 
+test('los mensajes se guardan y publican antes de encolarse; un duplicado no reinicia la espera', async t => {
+    const encolados = [];
+    const { api, conversaciones, mensajes, cambios } = preparar(t, {
+        bot: { encolar: mensaje => {
+            assert(mensajes.includes(mensaje));
+            assert(cambios.some(item => String(item.mensaje._id) === String(mensaje._id)));
+            if (mensaje.estadoBot === 'pendiente') encolados.push(mensaje);
+        } },
+    });
+    const telefono = '5491112345678';
+    await api.recibirMensajeWhatsapp(telefono, 'Antes de activar', undefined, undefined, { whatsappId: 'previo' });
+    conversaciones[0].botActivo = true;
+    for (const [id, texto] of [['uno', 'Hola tenés moto Corven'], ['dos', 'Qué precio'], ['tres', 'Sale patentada?']]) {
+        await api.recibirMensajeWhatsapp(telefono, texto, undefined, undefined, { whatsappId: id });
+    }
+    await api.recibirMensajeWhatsapp(telefono, 'Qué precio', undefined, undefined, { whatsappId: 'dos' });
+    assert.deepEqual(encolados.map(item => item.contenidoOriginal), ['Hola tenés moto Corven', 'Qué precio', 'Sale patentada?']);
+    assert.equal(mensajes.length, 4);
+});
+
 test('un fallo de OpenAI conserva el mensaje, se registra en consola y no se reprocesa', async t => {
     let intentos = 0;
     const { api, conversaciones, mensajes, errores } = preparar(t, {
@@ -228,6 +248,7 @@ test('una respuesta manual se integra mientras una imagen está en proceso y no 
     const analisis = new Promise(resolve => { liberarImagen = resolve; });
     let envios = 0;
     const { api, conversaciones, mensajes } = preparar(t, {
+        bot: { encolar: () => {}, cancelarEspera: async id => { assert.equal(id, String(conversaciones[0]._id)); assert.equal(conversaciones[0].botActivo, false); } },
         whatsapp: {
             obtenerMediaDesdeWhatsapp: async () => ({ buffer: Buffer.from('imagen'), mimeType: 'image/jpeg' }),
             enviarMensaje: async datos => { envios++; assert.equal(datos.phoneNumberId, 'numero-test'); return { messages: [{ id: 'wamid.vendedor' }] }; },

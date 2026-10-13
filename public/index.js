@@ -27,6 +27,7 @@ socket.on('disconnect', motivo => {
         mensajes = [];
         limpiarMetricas();
         limpiarPrompts();
+        cerrarDetalleMensaje();
         actualizarControlBot();
         $('body').attr('data-estado', 'login');
     }
@@ -38,6 +39,7 @@ socket.on('connect_error', error => {
         $('body').attr('data-estado', 'login');
         limpiarPrompts();
         limpiarMetricas();
+        cerrarDetalleMensaje();
     }
     Swal.fire({ icon: 'error', text: error.message });
 });
@@ -89,7 +91,8 @@ async function iniciarSesion(){
                 contrasena: $('#contrasena').val()
             })
         });
-        $('#contrasena').val('');
+        $('#contrasena').val('').attr('type', 'password');
+        $('#mostrar-contrasena').prop('checked', false);
         $('body').attr('data-estado', 'conversacion');
         socket.connect();
     }catch(error){
@@ -113,10 +116,13 @@ async function cerrarSesion(){
         $('#nombre-conversacion').text('Seleccioná una conversación');
         $('#telefono-conversacion').text('');
         $('#texto-mensaje, #contrasena, #buscar-conversacion').val('');
+        $('#contrasena').attr('type', 'password');
+        $('#mostrar-contrasena').prop('checked', false);
         $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
         actualizarControlBot();
         limpiarMetricas();
         limpiarPrompts();
+        cerrarDetalleMensaje();
         $('body').attr('data-estado', 'login');
     }catch(error){
         Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudo cerrar sesión.' });
@@ -169,12 +175,17 @@ function escaparHtml(texto) {
 }
 
 function actualizarControlBot() {
-    $('#bot-activo').prop('checked', !!conversacionActual?.botActivo)
+    const botActivo = !!conversacionActual?.botActivo;
+    $('#bot-activo').prop('checked', botActivo)
         .prop('disabled', !conversacionActual || guardandoBot === conversacionActual._id);
-    $('#estado-bot').text(conversacionActual?.botActivo ? 'Bot activo' : 'Bot inactivo');
-    $('#bot-detalle').text(conversacionActual?.requiereAtencion
-        ? 'Atención del vendedor: ' + (conversacionActual.motivoDerivacion || 'Consulta derivada.')
-        : conversacionActual?.botActivo ? 'Respuestas automáticas habilitadas para los próximos mensajes.' : 'Al activarlo, el bot responderá a los próximos mensajes.');
+    $('#estado-bot').text(botActivo ? 'Bot activo' : 'Bot inactivo');
+    $('.control-bot').attr('data-activo', String(botActivo));
+
+    $('#atencion-vendedor').prop('hidden', !conversacionActual?.requiereAtencion);
+    $('#motivo-vendedor').text(conversacionActual?.motivoDerivacion || 'Consulta derivada.');
+    $('#resumen-conversacion').text(conversacionActual
+        ? conversacionActual.resumen || 'Todavía no hay un resumen generado.'
+        : 'Seleccioná una conversación.');
 }
 
 async function cambiarEstadoBot() {
@@ -196,6 +207,21 @@ async function cambiarEstadoBot() {
         guardandoBot = null;
         actualizarControlBot();
     }
+}
+
+function mostrarDetalleMensaje(mensajeId) {
+    const mensaje = mensajes.find(item => String(item._id) === mensajeId);
+    if (!mensaje) return;
+
+    $('#mensaje-json').text(JSON.stringify(mensaje, null, 2));
+    const modal = document.getElementById('modal-mensaje');
+    if (!modal.open) modal.showModal();
+}
+
+function cerrarDetalleMensaje() {
+    const modal = document.getElementById('modal-mensaje');
+    if (modal?.open) modal.close();
+    $('#mensaje-json').text('');
 }
 
 function limpiarMetricas() {
@@ -293,6 +319,7 @@ async function obtenerMensajes(conversacionId, pagina = 0){
     const conversacion = conversaciones.find(c => c._id === conversacionId);
     if (!conversacion || (pagina > 0 && cargandoMensajes)) return;
     if (pagina === 0) {
+        cerrarDetalleMensaje();
         conversacionActual = conversacion;
         mensajes = [];
         paginaMensajes = 0;
@@ -353,7 +380,8 @@ function listarMensajes(){
         const id = String(mensaje._id);
         const enviado = mensaje.deSistemaParaCliente;
         let fila = filas.has(id) ? $(filas.get(id)) : $('<article>', { 'data-mensaje-id': id });
-        fila.attr({ class: 'mensaje mensaje-' + (enviado ? 'enviado' : 'recibido'), 'aria-label': enviado ? 'Mensaje enviado' : 'Mensaje recibido' });
+        fila.attr({ class: 'mensaje mensaje-' + (enviado ? 'enviado' : 'recibido'), 'aria-label': enviado ? 'Mensaje enviado' : 'Mensaje recibido',
+            title: 'Doble clic para ver el mensaje en JSON' });
         if (!filas.has(id)) {
             fila.append($('<div>', { class: 'mensaje-media' }), $('<div>', { class: 'mensaje-textos' }), $('<div>', { class: 'mensaje-meta' }));
         }
@@ -539,6 +567,14 @@ $('#prompt-selector').on('change', async () => {
 });
 
 $('#form-login').on('submit', ev => { ev.preventDefault(); iniciarSesion(); });
+$('#mostrar-contrasena').on('change', () => {
+    $('#contrasena').attr('type', $('#mostrar-contrasena').prop('checked') ? 'text' : 'password');
+});
+$('#mensajes').on('dblclick', '.mensaje', ev => {
+    mostrarDetalleMensaje($(ev.currentTarget).attr('data-mensaje-id'));
+});
+$('[data-cerrar-mensaje]').on('click', cerrarDetalleMensaje);
+$('#modal-mensaje').on('close', () => $('#mensaje-json').text(''));
 $('#btn-orden-ultimas').on('click', () => cambiarVistaListado('ultimas'));
 $('#btn-orden-pendientes').on('click', () => cambiarVistaListado('pendientes'));
 $('#buscar-conversacion').on('input', listarConversaciones);

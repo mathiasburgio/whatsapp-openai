@@ -132,7 +132,7 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
         console.log({ mensaje: mensaje.contenido, respuestaOpenAi });
     }
     if (falloProcesamiento) return { conversacion, mensaje, respuestaOpenAi };
-    try { await bot.responder(mensaje); }
+    try { bot.encolar(mensaje); }
     catch (error) { console.error('No se pudo guardar el estado del bot:', error.message); }
     return { conversacion, mensaje, respuestaOpenAi };
 }
@@ -148,6 +148,7 @@ async function enviarMensajeVendedor(conversacionId, contenido, datos) {
         $set: { botActivo: false },
     }, { returnDocument: 'after' });
     if (!conversacion?.telefono) throw new Error('La conversación no tiene teléfono de contacto.');
+    await bot.cancelarEspera(conversacionId);
     const recibido = await Mensaje.findOne({ conversacionId, deClienteParaSistema: true }).sort({ createdAt: -1, _id: -1 });
     let mensaje;
     try {

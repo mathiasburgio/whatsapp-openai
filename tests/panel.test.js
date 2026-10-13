@@ -41,12 +41,14 @@ test('el panel protege métricas y control de bot, valida booleanos y notifica l
     const id = '507f1f77bcf86cd799439011';
     let cambios = 0, consultas = 0, lecturaMetricas = 0;
     const periodosConsultados = [];
+    const esperasCanceladas = [];
     const conversacion = { _id: id, botActivo: false, telefono: '5491112345678' };
     const prompt = { id: 'respuesta', contenido: 'Respondé breve.', version: 'a'.repeat(64) };
     const filename = path.resolve(__dirname, '../index.js');
     const app = cargar(filename, {
         dotenv: { config() {} },
         './services/orquestador': {}, './services/mongo': {},
+        './services/bot': { cancelarEspera: async id => esperasCanceladas.push(id) },
         './services/whatsapp': { configurarWebhook() {}, recibirMensajeWebhook() {} },
         './services/usuarios': { iniciarSesion() {}, cerrarSesion() {} },
         './services/sockets': { inicializar() {}, notificarCambios: async actual => { cambios++; assert.equal(actual, conversacion); } },
@@ -107,6 +109,7 @@ test('el panel protege métricas y control de bot, valida booleanos y notifica l
     assert.equal(activada.body.telefono, '5491112345678');
     assert.equal((await pedir('/conversaciones/deshabilitar-bot', { conversacionId: id, botActivo: true })).body.botActivo, false);
     assert.equal(cambios, 2);
+    assert.deepEqual(esperasCanceladas, [id]);
     assert.equal((await pedir('/conversaciones/habilitar-bot', { conversacionId: '507f1f77bcf86cd799439099' })).status, 404);
     assert.equal((await pedir('/conversaciones/deshabilitar-bot', { conversacionId: '507f1f77bcf86cd799439099' })).status, 404);
     assert.equal(cambios, 2);

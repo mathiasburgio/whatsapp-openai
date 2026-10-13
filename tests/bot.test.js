@@ -28,10 +28,11 @@ function preparar(t, opciones = {}) {
         '../models/conversacion': { findById: async () => conversacion,
             updateOne: async (_, update) => actualizar(update), findOneAndUpdate: async (_, update) => actualizar(update) },
         '../models/mensaje': {
-            find: () => ({ sort: () => ({ limit: async () => [...mensajes].reverse() }) }),
+            find: () => ({ sort: () => ({ limit: async cantidad => [...mensajes].reverse().slice(0, cantidad) }) }),
             findOneAndUpdate: async (query, update) => {
-                if (!query.estadoBot.$in.includes(entrada.estadoBot)) return null;
-                Object.assign(entrada, update.$set); return entrada;
+                const mensaje = mensajes.find(item => String(item._id) === String(query._id));
+                if (!mensaje || !query.estadoBot.$in.includes(mensaje.estadoBot)) return null;
+                Object.assign(mensaje, update.$set); return mensaje;
             },
             create: async datos => { const mensaje = new Mensaje(datos); await mensaje.validate(); mensajes.push(mensaje); return mensaje; },
         },
@@ -49,6 +50,7 @@ function preparar(t, opciones = {}) {
         './openai': { procesarTexto: async (texto, config) => {
             llamadas.push({ datos: JSON.parse(texto), config });
             const etapa = config.esquema.nombre;
+            await opciones.duranteConsulta?.(etapa);
             let resultado;
             if (etapa === 'orquestador') resultado = opciones.decision || { accion: 'responder', filtro, motivo: 'Saludo' };
             if (etapa === 'respuesta') {
@@ -185,4 +187,62 @@ test('una preferencia de color se conserva para redactar después de consultar e
     assert.equal(entrada.accionEjecutada, 'buscar_vehiculo');
     assert.equal(conversacion.botActivo, true);
     assert.equal(mensajes[1].contenido.includes(enlace), true);
+});
+
+test('un bloque de más de doce mensajes llega completo a ambas llamadas y produce un solo envío', async t => {
+    const { api, entrada, mensajes, llamadas, envios, conversacion } = preparar(t);
+    const anteriores = Array.from({ length: 13 }, (_, i) => {
+        const mensaje = new Mensaje({ conversacionId: conversacion._id, deClienteParaSistema: true, estadoBot: 'pendiente',
+            contenidoOriginal: i === 0 ? 'Hola, tenés moto Corven?' : 'Pregunta ' + i });
+        mensaje.save = async () => mensaje;
+        return mensaje;
+    });
+    entrada.contenidoOriginal = 'Qué precio? Sale patentada?';
+    mensajes.unshift(...anteriores);
+    await api.responder(entrada, [...anteriores, entrada]);
+    assert.equal(envios.length, 1);
+    assert.equal(llamadas.length, 2);
+    for (const llamada of llamadas) {
+        assert.equal(llamada.datos.mensajes.length, 12);
+        assert.match(llamada.datos.mensajeActual, /^Hola, tenés moto Corven\?/);
+        assert.match(llamada.datos.mensajeActual, /Qué precio\? Sale patentada\?$/);
+    }
+    assert(anteriores.every(mensaje => mensaje.estadoBot === 'agrupado'));
+    assert.equal(entrada.estadoBot, 'respondido');
+    assert.equal(String(mensajes.at(-1).respuestaA), String(entrada._id));
+    assert.equal(conversacion.turnosDesdeResumen, 1);
+});
+
+test('si llega otro mensaje durante la generación, no envía y el siguiente turno reúne ambos', async t => {
+    let vigente = true;
+    const { api, entrada, mensajes, llamadas, envios, conversacion } = preparar(t, {
+        duranteConsulta: etapa => { if (etapa === 'respuesta') vigente = false; },
+    });
+    entrada.contenidoOriginal = 'Tenés Corven?';
+    await api.responder(entrada, [entrada], { vigente: () => vigente });
+    assert.equal(envios.length, 0);
+    assert.equal(entrada.estadoBot, 'pendiente');
+    assert.equal(entrada.tokens.total, 30);
+    const segundo = new Mensaje({ conversacionId: conversacion._id, whatsappId: 'wamid.segundo',
+        contenidoOriginal: 'Qué precio?', deClienteParaSistema: true, estadoBot: 'pendiente' });
+    segundo.save = async () => segundo;
+    mensajes.push(segundo);
+    await api.responder(segundo, [entrada, segundo]);
+    assert.equal(envios.length, 1);
+    assert.equal(envios[0].replyToMessageId, 'wamid.segundo');
+    assert.equal(llamadas.at(-1).datos.mensajeActual, 'Tenés Corven?\nQué precio?');
+    assert.equal(entrada.estadoBot, 'agrupado');
+    assert.equal(segundo.estadoBot, 'respondido');
+    assert.equal(conversacion.tokens.total, 60);
+});
+
+test('cancelar la espera durante la generación impide enviar aunque el bot se haya reactivado', async t => {
+    let cancelada = false;
+    const { api, entrada, envios, conversacion } = preparar(t, {
+        duranteConsulta: etapa => { if (etapa === 'respuesta') cancelada = true; },
+    });
+    await api.responder(entrada, [entrada], { vigente: () => !cancelada, cancelada: () => cancelada });
+    assert.equal(conversacion.botActivo, true);
+    assert.equal(envios.length, 0);
+    assert.equal(entrada.estadoBot, 'omitido');
 });
