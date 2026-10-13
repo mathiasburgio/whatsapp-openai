@@ -8,6 +8,12 @@ function serializar(operacion) {
     return actual;
 }
 
+function bonificadoReferral(conversacion, fechaEmitida) {
+    const desde = conversacion?.referralFecha;
+    const transcurrido = desde instanceof Date ? fechaEmitida.getTime() - desde.getTime() : NaN;
+    return transcurrido >= 0 && transcurrido < 72 * 60 * 60 * 1000;
+}
+
 async function verificarLimiteMensual() {
     const limite = Number(process.env.WHATSAPP_MONTHLY_RESPONSE_LIMIT ?? 2000);
     if (!Number.isSafeInteger(limite) || limite < 0) throw new Error('Límite mensual de respuestas inválido.');
@@ -22,4 +28,4 @@ async function verificarLimiteMensual() {
     if (cantidad >= limite) throw new Error('Se alcanzó el límite mensual de respuestas de WhatsApp.');
 }
 
-module.exports = { serializar, verificarLimiteMensual };
+module.exports = { serializar, verificarLimiteMensual, bonificadoReferral };

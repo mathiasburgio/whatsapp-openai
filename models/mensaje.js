@@ -17,7 +17,7 @@ const mensajeSchema = new mongoose.Schema({
 
     usoLLM: Boolean,
     respuestaAutomatica: Boolean, //respuesta del bot aceptada por WhatsApp
-    bonificadoReferral: { type: Boolean, default: false },
+    bonificadoReferral: { type: Boolean, default: false }, //envío manual o automático dentro de 72hs desde referralFecha
     respuestaA: oid, //mensaje del cliente que originó la respuesta automática
     estadoBot: String, //pendiente, procesando, enviando, respondido, agrupado, derivado, omitido, fallido o envio_incierto
     errorBot: String,

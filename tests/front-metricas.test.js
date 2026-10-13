@@ -6,7 +6,8 @@ const path = require('node:path');
 
 const datos = { periodo: { inicio: '2026-10-01T00:00:00.000Z' }, llamadasWebSearch: 2,
     llamadasProcesarTexto: 8, segundosProcesados: 30, tokensProcesados: 12345, imagenesProcesadas: 3,
-    respuestasAutomaticas: 0, tokensEntrada: 12000, tokensSalida: 345 };
+    respuestasAutomaticas: 0, respuestasWhatsappTotales: 10, respuestasWhatsappConGracia: 3, respuestasWhatsappSinGracia: 7,
+    tokensEntrada: 12000, tokensSalida: 345 };
 
 function preparar(respuesta = async () => datos) {
     const elementos = new Map();
@@ -34,6 +35,9 @@ test('el botón abre las métricas sin Bootstrap, muestra los datos y permite ce
     assert.equal(jquery('#metricas-contenido').prop('hidden'), false);
     assert.equal(jquery('#metrica-tokens').text(), '12.345');
     assert.equal(jquery('#metrica-respuestas').text(), '0');
+    assert.equal(jquery('#metrica-whatsapp-totales').text(), '10');
+    assert.equal(jquery('#metrica-whatsapp-con-gracia').text(), '3');
+    assert.equal(jquery('#metrica-whatsapp-sin-gracia').text(), '7');
     assert.match(jquery('#periodo-metricas').text(), /octubre.*2026.*UTC/);
     cerrar();
     assert.equal(dialog.open, false);

@@ -59,7 +59,8 @@ async function iniciar() {
     app.post('/sesion/cerrar', (req, res) => res.json({ ok: true }));
     app.get('/metricas/mes', (req, res) => res.json({ periodo: { inicio: '2026-10-01T00:00:00Z' },
         llamadasWebSearch: 2, llamadasProcesarTexto: 8, segundosProcesados: 30, tokensProcesados: 12345, imagenesProcesadas: 3,
-        respuestasAutomaticas: 4, tokensEntrada: 12000, tokensSalida: 345 }));
+        respuestasAutomaticas: 4, respuestasWhatsappTotales: 6, respuestasWhatsappConGracia: 2, respuestasWhatsappSinGracia: 4,
+        tokensEntrada: 12000, tokensSalida: 345 }));
     app.get('/prompts/obtener', async (req, res) => res.json(await prompts.listar()));
     app.post('/prompts/guardar', async (req, res) => {
         try { res.json(await prompts.guardar(req.body.id, req.body.contenido, req.body.version)); }

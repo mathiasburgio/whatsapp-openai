@@ -165,14 +165,17 @@ async function enviarMensajeVendedor(conversacionId, contenido, datos) {
     try {
         await envios.serializar(async () => {
             await envios.verificarLimiteMensual();
+            const actual = await Conversacion.findById(conversacionId);
             const crudo = await require('./whatsapp').enviarMensaje({ to: conversacion.telefono, text: contenido,
                 phoneNumberId: recibido?.mediaPhoneNumberId });
             const whatsappId = crudo?.messages?.[0]?.id;
             if (typeof whatsappId !== 'string' || !whatsappId) throw new Error('WhatsApp no confirmó el envío.');
+            const fechaEmitida = new Date();
             mensaje = await Mensaje.create({ conversacionId, contenido, emisor: recibido?.receptor,
                 receptor: conversacion.telefono, mediaPhoneNumberId: recibido?.mediaPhoneNumberId,
                 vendedorId: datos.usuarioId, deClienteParaSistema: false, deSistemaParaCliente: true,
-                respuestaAutomatica: false, usoLLM: false, whatsappId, crudo, fechaEmitida: new Date() });
+                respuestaAutomatica: false, usoLLM: false, whatsappId, crudo, fechaEmitida,
+                bonificadoReferral: envios.bonificadoReferral(actual, fechaEmitida) });
             await Conversacion.findOneAndUpdate({ _id: conversacionId }, { $set: {
                 deClienteParaSistema: false, ultimoMensaje: mensaje.toObject(),
             } });

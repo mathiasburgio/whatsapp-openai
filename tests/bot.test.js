@@ -24,7 +24,7 @@ function preparar(t, opciones = {}) {
         for (const [campo, valor] of Object.entries(update.$push || {})) conversacion[campo].push(valor);
         return conversacion;
     }
-    const filtro = { marca: null, modelo: null, precioMinimo: null, precioMaximo: null };
+    const filtro = { marca: null, modelo: null, precioMinimo: null, precioMaximo: null, vehiculoId: null };
     const mocks = {
         '../models/conversacion': { findById: async () => conversacion,
             updateOne: async (query, update) => {
@@ -53,6 +53,7 @@ function preparar(t, opciones = {}) {
         },
         './envios': {
             serializar: require('../services/envios').serializar,
+            bonificadoReferral: require('../services/envios').bonificadoReferral,
             verificarLimiteMensual: async () => {
                 const cantidad = mensajes.filter(item => item.deSistemaParaCliente && item.whatsappId).length;
                 if (cantidad >= Number(process.env.WHATSAPP_MONTHLY_RESPONSE_LIMIT)) {
@@ -127,6 +128,19 @@ test('el bot activo selecciona, responde y registra un único envío con consumo
     await api.responder(entrada);
     assert.equal(envios.length, 1);
 });
+test('cada respuesta automática guarda su gracia al enviarse y mantiene esa marca ante un nuevo referral', async t => {
+    for (const dentro of [true, false]) {
+        const { api, conversacion, entrada, mensajes } = preparar(t);
+        conversacion.referralFecha = new Date(Date.now() - (dentro ? 1 : 73) * 60 * 60 * 1000);
+        await api.responder(entrada);
+        const salida = mensajes.find(item => item.respuestaAutomatica);
+        assert.equal(salida.bonificadoReferral, dentro);
+        conversacion.referralFecha = new Date();
+        assert.equal(salida.bonificadoReferral, dentro);
+        assert.equal(conversacion.ultimoMensaje.bonificadoReferral, dentro);
+    }
+});
+
 test('el bot apagado no consume IA ni envía; activar después no responde mensajes omitidos', async t => {
     const { api, entrada, llamadas, envios, conversacion } = preparar(t, { activo: false });
     await api.responder(entrada);
@@ -145,7 +159,7 @@ test('si se apaga durante la generación, no envía y conserva el consumo', asyn
 });
 test('sin catálogo registra una intervención pendiente y mantiene el bot activo', async t => {
     const { api, entrada, conversacion, llamadas, envios } = preparar(t, { decision: {
-        accion: 'buscar_vehiculo', filtro: { marca: 'Corven', modelo: 'XXX', precioMinimo: null, precioMaximo: null }, motivo: 'Consulta precio' } });
+        accion: 'buscar_vehiculo', filtro: { marca: 'Corven', modelo: 'XXX', precioMinimo: null, precioMaximo: null, vehiculoId: null }, motivo: 'Consulta precio' } });
     await api.responder(entrada);
     assert.equal(llamadas[1].datos.catalogo.estado, 'sin_configurar');
     assert.equal(llamadas[1].datos.decision.accion, 'notify_seller');
@@ -210,7 +224,7 @@ test('el resumen usa el historial y un fallo de memoria no repite una respuesta'
 
 test('una preferencia de color se conserva para redactar después de consultar el catálogo', async t => {
     const enlace = 'https://rpsbikes.com.ar/moto/navi';
-    const filtro = { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null };
+    const filtro = { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null, vehiculoId: null };
     const { api, entrada, llamadas, mensajes, conversacion } = preparar(t, {
         catalogo: true,
         decision: { accion: 'buscar_vehiculo', filtro, motivo: 'Consulta de precio con preferencia de color.' },
@@ -222,7 +236,7 @@ test('una preferencia de color se conserva para redactar después de consultar e
     assert.equal(llamadas.length, 2);
     assert.equal(llamadas[0].config.esquema.nombre, 'orquestador');
     assert.deepEqual(Object.keys(llamadas[0].config.esquema.schema.properties.filtro.properties).sort(),
-        ['marca', 'modelo', 'precioMaximo', 'precioMinimo']);
+        ['marca', 'modelo', 'precioMaximo', 'precioMinimo', 'vehiculoId']);
     assert.equal(llamadas[1].config.esquema.nombre, 'respuesta');
     assert.equal(llamadas[1].datos.mensajes.at(-1).texto, entrada.contenidoOriginal);
     assert.deepEqual(llamadas[1].datos.decision.filtro, filtro);
@@ -245,9 +259,10 @@ test('una preferencia de color se conserva para redactar después de consultar e
 
 test('una consulta por Honda Navi compara el estado con el catálogo después de buscar solo marca y modelo', async t => {
     for (const consulta of ['Tenés Honda Navi?', 'Tenés Honda Navi nueva?']) {
-        const filtro = { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null };
+        const filtro = { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null, vehiculoId: null };
         const usada = { marca: 'Honda', modelo: 'Navi', estado: 'usado', color: 'Rojo', disponible: true,
-            detalle: 'Muy buen estado', precio: 1800000, moneda: 'ARS', enlace: 'https://rpsbikes.com.ar/moto/navi-usada' };
+            detalle: 'Muy buen estado', observacionesInternas: 'Entrega sujeta a revisión de taller.',
+            precio: 1800000, moneda: 'ARS', enlace: 'https://rpsbikes.com.ar/moto/navi-usada' };
         const { api, entrada, llamadas, busquedas, conversacion } = preparar(t, { catalogo: true,
             decision: { accion: 'buscar_vehiculo', filtro, motivo: 'Consulta Honda Navi.' }, vehiculos: [usada] });
         entrada.contenidoOriginal = consulta;
@@ -256,6 +271,8 @@ test('una consulta por Honda Navi compara el estado con el catálogo después de
         assert.equal(llamadas[1].config.esquema.nombre, 'respuesta');
         assert.match(llamadas[1].datos.mensajeActual, new RegExp(consulta.replace('?', '\\?')));
         assert.deepEqual(llamadas[1].datos.catalogo.vehiculos, [usada]);
+        assert.equal(llamadas[1].datos.catalogo.vehiculos[0].observacionesInternas, usada.observacionesInternas);
+        assert.equal(JSON.parse(entrada.parametroRecibido).vehiculos[0].observacionesInternas, usada.observacionesInternas);
         assert.equal(entrada.accionEjecutada, 'buscar_vehiculo');
         assert.equal(conversacion.accionesExternasRequeridas.length, 0);
         assert.equal(conversacion.botActivo, true);
@@ -263,7 +280,7 @@ test('una consulta por Honda Navi compara el estado con el catálogo después de
 });
 
 test('un presupuesto permite buscar sin marca ni modelo y conserva los límites numéricos', async t => {
-    const filtro = { marca: null, modelo: null, precioMinimo: 0, precioMaximo: 2000000 };
+    const filtro = { marca: null, modelo: null, precioMinimo: 0, precioMaximo: 2000000, vehiculoId: null };
     const { api, entrada, llamadas, busquedas } = preparar(t, { catalogo: true,
         decision: { accion: 'buscar_vehiculo', filtro, motivo: 'Presupuesto máximo de dos millones.' } });
     entrada.contenidoOriginal = 'Qué motos tenés hasta dos millones?';
@@ -274,10 +291,35 @@ test('un presupuesto permite buscar sin marca ni modelo y conserva los límites 
     assert.equal(entrada.estadoBot, 'respondido');
 });
 
+test('un ID de vehículo permite consultar la moto concreta y las referencias anteriores llegan al LLM', async t => {
+    const vehiculoId = '507f1f77bcf86cd799439011';
+    for (const campoId of ['_id', 'id', 'vehiculoId']) {
+        const filtro = { marca: null, modelo: null, precioMinimo: null, precioMaximo: null, vehiculoId };
+        const { api, entrada, mensajes, llamadas, busquedas } = preparar(t, { catalogo: true,
+            decision: { accion: 'buscar_vehiculo', filtro, motivo: 'Verificar el precio de la moto roja consultada.' } });
+        const anterior = new Mensaje({ conversacionId: entrada.conversacionId, deClienteParaSistema: true,
+            contenidoOriginal: 'Tenés Honda Navi?', parametroRecibido: JSON.stringify({ estado: 'ok', vehiculos: [
+                { [campoId]: vehiculoId, marca: 'Honda', modelo: 'Navi', color: 'Rojo', credencial: 'secreto' },
+                { _id: 'no-es-un-id', marca: 'Otra' },
+            ] }) });
+        const sinCatalogo = new Mensaje({ conversacionId: entrada.conversacionId, deClienteParaSistema: true, parametroRecibido: 'JSON anterior inválido' });
+        mensajes.unshift(anterior, sinCatalogo);
+        entrada.contenidoOriginal = 'Qué precio tiene esa Navi roja?';
+        await api.responder(entrada);
+        assert.deepEqual(busquedas, [filtro]);
+        assert.deepEqual(JSON.parse(entrada.parametroEjecutado), filtro);
+        assert.deepEqual(llamadas[0].datos.mensajes.find(item => item.id === String(anterior._id)).vehiculosConsultados,
+            [{ vehiculoId, marca: 'Honda', modelo: 'Navi', color: 'Rojo' }]);
+        assert.deepEqual(llamadas[0].datos.mensajes.find(item => item.id === String(sinCatalogo._id)).vehiculosConsultados, []);
+        assert.equal(entrada.estadoBot, 'respondido');
+    }
+});
+
 test('precios inválidos y filtros anteriores se rechazan antes de consultar el catálogo', async t => {
     for (const cambio of [{ precioMinimo: -1 }, { precioMaximo: '2000000' }, { precioMaximo: Infinity },
-        { precioMinimo: 200, precioMaximo: 100 }, { estado: 'nuevo' }, { vehiculo: 'moto' }, { tipo: 'urbana' }, { color: 'rojo' }]) {
-        const filtro = { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null, ...cambio };
+        { precioMinimo: 200, precioMaximo: 100 }, { estado: 'nuevo' }, { vehiculo: 'moto' }, { tipo: 'urbana' }, { color: 'rojo' },
+        { vehiculoId: 'no-es-un-id' }, { vehiculoId: 'g'.repeat(24) }, { vehiculoId: 123 }, { vehiculoId: { $ne: null } }]) {
+        const filtro = { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null, vehiculoId: null, ...cambio };
         const { api, entrada, busquedas, envios, conversacion } = preparar(t, { catalogo: true,
             decision: { accion: 'buscar_vehiculo', filtro, motivo: 'Consulta catálogo.' } });
         await api.responder(entrada);
@@ -351,7 +393,7 @@ test('cancelar la espera durante la generación impide enviar aunque el bot se h
 
 test('una derivación previa a buscar deja el motivo y la configuración del catálogo en acciones', async t => {
     const { api, entrada } = preparar(t, { catalogo: true, decision: {
-        accion: 'notify_seller', filtro: { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null },
+        accion: 'notify_seller', filtro: { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null, vehiculoId: null },
         motivo: 'El cliente pidió un vendedor.',
     } });
     await api.responder(entrada);
@@ -366,7 +408,7 @@ test('una derivación previa a buscar deja el motivo y la configuración del cat
 
 test('un error de catálogo conserva su causa y luego registra la respuesta y la derivación', async t => {
     const { api, entrada } = preparar(t, { catalogo: true, fallarCatalogo: true, decision: {
-        accion: 'buscar_vehiculo', filtro: { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null }, motivo: 'Consulta precio',
+        accion: 'buscar_vehiculo', filtro: { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null, vehiculoId: null }, motivo: 'Consulta precio',
     } });
     await api.responder(entrada);
     const fallida = entrada.acciones.find(item => item.accion === 'buscar_vehiculo' && item.estado === 'error');
@@ -423,7 +465,7 @@ test('la espera y su cancelación quedan registradas sin consumir IA ni enviar',
 });
 
 function decisionFueraDeTema(ids) {
-    return { accion: 'responder', filtro: { marca: null, modelo: null, precioMinimo: null, precioMaximo: null },
+    return { accion: 'responder', filtro: { marca: null, modelo: null, precioMinimo: null, precioMaximo: null, vehiculoId: null },
         motivo: 'Consulta ajena al comercio.', mensajesFueraDeTema: ids };
 }
 
@@ -544,7 +586,7 @@ test('una solicitud por una usada queda pendiente mientras el bot responde luego
     const { api, entrada, conversacion, mensajes, envios, llamadas } = preparar(t, opciones);
     const detalle = 'Evaluar si acepta una Rouser 200 usada como parte de pago.';
     entrada.contenidoOriginal = 'Puedo entregar mi Rouser 200 usada?';
-    opciones.decision = { accion: 'notify_seller', filtro: { marca: null, modelo: null, precioMinimo: null, precioMaximo: null },
+    opciones.decision = { accion: 'notify_seller', filtro: { marca: null, modelo: null, precioMinimo: null, precioMaximo: null, vehiculoId: null },
         motivo: detalle, solicitudesExternas: [{ mensajeId: String(entrada._id), detalle }] };
     await api.responder(entrada);
     assert.equal(conversacion.botActivo, true);
@@ -557,7 +599,7 @@ test('una solicitud por una usada queda pendiente mientras el bot responde luego
         nuevo.save = async () => nuevo;
         mensajes.push(nuevo);
         opciones.decision = { accion: tipo === 'precio' ? 'buscar_vehiculo' : 'responder',
-            filtro: { marca: tipo === 'precio' ? 'Honda' : null, modelo: tipo === 'precio' ? 'Navi' : null, precioMinimo: null, precioMaximo: null }, motivo: 'Consulta ' + tipo };
+            filtro: { marca: tipo === 'precio' ? 'Honda' : null, modelo: tipo === 'precio' ? 'Navi' : null, precioMinimo: null, precioMaximo: null, vehiculoId: null }, motivo: 'Consulta ' + tipo };
         await api.responder(nuevo);
         assert.equal(nuevo.estadoBot, 'respondido');
         assert.equal(conversacion.botActivo, true);
@@ -575,7 +617,7 @@ test('un bloque puede consultar catálogo y solicitar intervención para otro me
     usada.save = async () => usada;
     mensajes.unshift(usada);
     entrada.contenidoOriginal = 'Cuál es el precio de la Honda Navi?';
-    opciones.decision = { accion: 'buscar_vehiculo', filtro: { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null },
+    opciones.decision = { accion: 'buscar_vehiculo', filtro: { marca: 'Honda', modelo: 'Navi', precioMinimo: null, precioMaximo: null, vehiculoId: null },
         motivo: 'Consulta de precio.', solicitudesExternas: [{ mensajeId: String(usada._id), detalle: 'Evaluar la moto usada como parte de pago.' }] };
     await api.responder(entrada, [usada, entrada]);
     assert.equal(llamadas.at(-1).datos.catalogo.estado, 'ok');
@@ -591,7 +633,7 @@ test('ampliar un bloque durante la generación no duplica la intervención del m
     const opciones = { duranteConsulta: etapa => { if (etapa === 'respuesta' && interrumpir) vigente = false; } };
     const { api, entrada, conversacion, mensajes } = preparar(t, opciones);
     const solicitud = { mensajeId: String(entrada._id), detalle: 'Evaluar moto usada.' };
-    opciones.decision = { accion: 'notify_seller', filtro: { marca: null, modelo: null, precioMinimo: null, precioMaximo: null }, motivo: solicitud.detalle, solicitudesExternas: [solicitud] };
+    opciones.decision = { accion: 'notify_seller', filtro: { marca: null, modelo: null, precioMinimo: null, precioMaximo: null, vehiculoId: null }, motivo: solicitud.detalle, solicitudesExternas: [solicitud] };
     await api.responder(entrada, [entrada], { vigente: () => vigente });
     assert.equal(entrada.estadoBot, 'pendiente');
     assert.equal(conversacion.accionesExternasRequeridas.length, 1);

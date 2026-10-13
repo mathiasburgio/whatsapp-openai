@@ -4,6 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Module } = require('node:module');
 
+test('la gracia empieza en el referral y termina exactamente a las 72 horas', () => {
+    const { bonificadoReferral } = require('../services/envios');
+    const referralFecha = new Date('2026-10-13T12:00:00Z');
+    assert.equal(bonificadoReferral({}, referralFecha), false);
+    assert.equal(bonificadoReferral({ referralFecha: new Date(NaN) }, referralFecha), false);
+    assert.equal(bonificadoReferral({ referralFecha }, new Date('2026-10-13T11:59:59.999Z')), false);
+    assert.equal(bonificadoReferral({ referralFecha }, referralFecha), true);
+    assert.equal(bonificadoReferral({ referralFecha }, new Date('2026-10-16T11:59:59.999Z')), true);
+    assert.equal(bonificadoReferral({ referralFecha }, new Date('2026-10-16T12:00:00Z')), false);
+    assert.equal(bonificadoReferral({ referralFecha }, new Date('2026-10-16T12:00:00.001Z')), false);
+});
+
 test('el cupo mensual cuenta cualquier respuesta saliente confirmada por WhatsApp', async t => {
     const valorOriginal = process.env.WHATSAPP_MONTHLY_RESPONSE_LIMIT;
     t.after(() => {

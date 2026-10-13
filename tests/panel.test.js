@@ -12,13 +12,21 @@ function cargar(filename, mocks, fuente = fs.readFileSync(filename, 'utf8')) {
     return modulo.exports;
 }
 
-test('métricas usa el mes UTC completo, excluye rechazos y cuenta solo respuestas automáticas aceptadas', async () => {
+test('métricas usa el mes UTC completo y separa respuestas WhatsApp confirmadas según la gracia', async () => {
     let filtroUso, filtroMensajes;
     let registros = [{ llamadasWebSearch: 3, llamadasProcesarTexto: 8, segundosProcesados: 20, imagenesProcesadas: 2,
         tokensEntrada: 40, tokensSalida: 10, tokensProcesados: 50 }];
+    let envios = [{ respuestasAutomaticas: 4, respuestasWhatsappTotales: 6, respuestasWhatsappConGracia: 2, respuestasWhatsappSinGracia: 4 }];
     const api = cargar(path.resolve(__dirname, '../services/metricas.js'), {
         '../models/uso': { aggregate: async pipeline => { filtroUso = pipeline[0].$match; return registros; } },
-        '../models/mensaje': { countDocuments: async query => { filtroMensajes = query; return 4; } },
+        '../models/mensaje': { aggregate: async pipeline => {
+            filtroMensajes = pipeline[0].$match;
+            const grupo = pipeline[1].$group;
+            assert.deepEqual(grupo.respuestasWhatsappTotales, { $sum: 1 });
+            assert.deepEqual(grupo.respuestasWhatsappConGracia.$sum.$cond, [{ $eq: ['$bonificadoReferral', true] }, 1, 0]);
+            assert.deepEqual(grupo.respuestasWhatsappSinGracia.$sum.$cond, [{ $eq: ['$bonificadoReferral', true] }, 0, 1]);
+            return envios;
+        } },
     });
     const metricas = await api.obtenerMetricasMensuales(new Date('2026-12-31T23:59:59.999Z'));
     assert.deepEqual(metricas.periodo, { inicio: '2026-12-01T00:00:00.000Z', fin: '2027-01-01T00:00:00.000Z', zonaHoraria: 'UTC' });
@@ -26,15 +34,21 @@ test('métricas usa el mes UTC completo, excluye rechazos y cuenta solo respuest
     assert.deepEqual(filtroUso.estado, { $ne: 'rechazado' });
     assert.equal(filtroUso.createdAt.$gte.toISOString(), metricas.periodo.inicio);
     assert.equal(filtroUso.createdAt.$lt.toISOString(), metricas.periodo.fin);
-    assert.equal(filtroMensajes.respuestaAutomatica, true);
+    assert.equal(Object.hasOwn(filtroMensajes, 'respuestaAutomatica'), false);
     assert.equal(filtroMensajes.deSistemaParaCliente, true);
     assert.deepEqual(filtroMensajes.whatsappId, { $type: 'string' });
     assert.deepEqual(filtroMensajes.fechaEmitida, filtroUso.createdAt);
     assert.equal(metricas.tokensProcesados, 50);
     assert.equal(metricas.respuestasAutomaticas, 4);
+    assert.equal(metricas.respuestasWhatsappTotales, 6);
+    assert.equal(metricas.respuestasWhatsappConGracia, 2);
+    assert.equal(metricas.respuestasWhatsappSinGracia, 4);
+    assert.equal(metricas.respuestasWhatsappTotales, metricas.respuestasWhatsappConGracia + metricas.respuestasWhatsappSinGracia);
     registros = [];
+    envios = [];
     const vacias = await api.obtenerMetricasMensuales(new Date('2026-01-01T00:00:00Z'));
-    for (const campo of ['llamadasWebSearch', 'llamadasProcesarTexto', 'segundosProcesados', 'imagenesProcesadas', 'tokensEntrada', 'tokensSalida', 'tokensProcesados']) assert.equal(vacias[campo], 0);
+    for (const campo of ['llamadasWebSearch', 'llamadasProcesarTexto', 'segundosProcesados', 'imagenesProcesadas', 'tokensEntrada', 'tokensSalida', 'tokensProcesados',
+        'respuestasAutomaticas', 'respuestasWhatsappTotales', 'respuestasWhatsappConGracia', 'respuestasWhatsappSinGracia']) assert.equal(vacias[campo], 0);
 });
 
 test('el panel protege métricas y control de bot, valida booleanos y notifica los cambios persistidos', async t => {

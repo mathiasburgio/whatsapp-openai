@@ -7,7 +7,7 @@ async function obtenerMetricasMensuales(ahora = new Date()) {
     inicio.setUTCFullYear(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1);
     const fin = new Date(0);
     fin.setUTCFullYear(ahora.getUTCFullYear(), ahora.getUTCMonth() + 1, 1);
-    const [usos, respuestasAutomaticas] = await Promise.all([
+    const [usos, respuestas] = await Promise.all([
         Uso.aggregate([
             { $match: { servicio: 'openai', createdAt: { $gte: inicio, $lt: fin }, estado: { $ne: 'rechazado' } } },
             { $group: {
@@ -22,14 +22,23 @@ async function obtenerMetricasMensuales(ahora = new Date()) {
             } },
             { $project: { _id: 0 } },
         ]),
-        Mensaje.countDocuments({ respuestaAutomatica: true, deSistemaParaCliente: true,
-            whatsappId: { $type: 'string' }, fechaEmitida: { $gte: inicio, $lt: fin } }),
+        Mensaje.aggregate([
+            { $match: { deSistemaParaCliente: true, whatsappId: { $type: 'string' }, fechaEmitida: { $gte: inicio, $lt: fin } } },
+            { $group: { _id: null,
+                respuestasAutomaticas: { $sum: { $cond: [{ $eq: ['$respuestaAutomatica', true] }, 1, 0] } },
+                respuestasWhatsappTotales: { $sum: 1 },
+                respuestasWhatsappConGracia: { $sum: { $cond: [{ $eq: ['$bonificadoReferral', true] }, 1, 0] } },
+                respuestasWhatsappSinGracia: { $sum: { $cond: [{ $eq: ['$bonificadoReferral', true] }, 0, 1] } },
+            } },
+            { $project: { _id: 0 } },
+        ]),
     ]);
     return {
         periodo: { inicio: inicio.toISOString(), fin: fin.toISOString(), zonaHoraria: 'UTC' },
         llamadasWebSearch: 0, llamadasProcesarTexto: 0, segundosProcesados: 0, imagenesProcesadas: 0,
         tokensEntrada: 0, tokensSalida: 0, tokensProcesados: 0,
-        ...usos[0], respuestasAutomaticas,
+        respuestasAutomaticas: 0, respuestasWhatsappTotales: 0, respuestasWhatsappConGracia: 0, respuestasWhatsappSinGracia: 0,
+        ...usos[0], ...respuestas[0],
     };
 }
 

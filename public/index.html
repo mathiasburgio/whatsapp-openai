@@ -344,9 +344,13 @@
                             <dl class="metrica"><dt>Tokens procesados</dt><dd id="metrica-tokens">—</dd></dl>
                             <dl class="metrica"><dt>Imágenes procesadas</dt><dd id="metrica-imagenes">—</dd></dl>
                             <dl class="metrica"><dt>Respuestas automáticas enviadas</dt><dd id="metrica-respuestas">—</dd></dl>
+                            <dl class="metrica"><dt>Respuestas WhatsApp del mes</dt><dd id="metrica-whatsapp-totales">—</dd></dl>
+                            <dl class="metrica"><dt>Dentro de las 72 hs de Meta Ads</dt><dd id="metrica-whatsapp-con-gracia">—</dd></dl>
+                            <dl class="metrica"><dt>Fuera del período de Meta Ads</dt><dd id="metrica-whatsapp-sin-gracia">—</dd></dl>
                         </div>
                         <p id="metricas-detalle-tokens" class="metricas-nota"></p>
                         <p class="metricas-nota">Todas las conversaciones · Mes en UTC. Las llamadas excluyen solicitudes rechazadas. Audio e imágenes cuentan procesamientos completados. Los tokens incluyen el consumo informado en errores. Las llamadas de texto excluyen búsquedas web y Decisions.</p>
+                        <p class="metricas-nota">WhatsApp incluye respuestas del bot y del vendedor con envío confirmado. El período de Meta Ads se registra al enviar cada mensaje. Los mensajes anteriores sin esa marca cuentan fuera del período.</p>
                     </div>
                 </div>
                 <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-cerrar-metricas>Cerrar</button></div>
@@ -385,6 +389,6 @@
     <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/index.js?v=acciones-externas-7"></script>
+    <script src="/index.js?v=metricas-whatsapp-8"></script>
 </body>
 </html>

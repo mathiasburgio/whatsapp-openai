@@ -5,13 +5,14 @@ test('catálogo desactivado no consulta; activado envía filtros y proyecta solo
     const entorno = ['VEHICULOS_API_HABILITADA', 'VEHICULOS_API_URL', 'VEHICULOS_API_TOKEN'].map(nombre => [nombre, process.env[nombre]]);
     t.after(() => entorno.forEach(([nombre, valor]) => { if (valor === undefined) delete process.env[nombre]; else process.env[nombre] = valor; }));
     let consultas = 0;
+    const vehiculoId = '507f1f77bcf86cd799439011';
     let esperados = { marca: 'Corven', modelo: 'XXX', precioMinimo: '0', precioMaximo: '100' };
     t.mock.method(global, 'fetch', async (url, opciones) => {
         consultas++;
         assert.equal(url.origin + url.pathname, 'https://rpsbikes.com.ar/buscar');
         assert.deepEqual(Object.fromEntries(url.searchParams), esperados);
         assert.equal(opciones.headers.Authorization, 'Bearer prueba');
-        return new Response(JSON.stringify({ vehiculos: [{ marca: 'Corven', modelo: 'XXX', vehiculo: 'moto', tipo: 'urbana', estado: 'usado', detalle: 'Muy buen estado', color: 'Rojo', disponible: true, enlace: 'https://rpsbikes.com.ar/moto/corven', precio: 100, moneda: 'ARS', credencial: 'secreto' }] }));
+        return new Response(JSON.stringify({ vehiculos: [{ vehiculoId, marca: 'Corven', modelo: 'XXX', vehiculo: 'moto', tipo: 'urbana', estado: 'usado', detalle: 'Muy buen estado', observacionesInternas: 'Confirmar entrega después de revisión de taller.', color: 'Rojo', disponible: true, enlace: 'https://rpsbikes.com.ar/moto/corven', precio: 100, moneda: 'ARS', credencial: 'secreto' }] }));
     });
     process.env.VEHICULOS_API_HABILITADA = 'false';
     const filtro = { marca: 'Corven', modelo: 'XXX', precioMinimo: 0, precioMaximo: 100,
@@ -19,20 +20,29 @@ test('catálogo desactivado no consulta; activado envía filtros y proyecta solo
     assert.equal((await vehiculos.buscar(filtro)).estado, 'sin_configurar');
     assert.equal(consultas, 0);
     process.env.VEHICULOS_API_HABILITADA = 'true';
-    process.env.VEHICULOS_API_URL = 'https://rpsbikes.com.ar/buscar?estado=nuevo&color=blanco&vehiculo=moto&tipo=urbana&precioMinimo=10&precioMaximo=20&marca=Honda&privado=ignorado';
+    process.env.VEHICULOS_API_URL = 'https://rpsbikes.com.ar/buscar?estado=nuevo&color=blanco&vehiculo=moto&tipo=urbana&precioMinimo=10&precioMaximo=20&marca=Honda&privado=ignorado&vehiculoId=' + vehiculoId;
     process.env.VEHICULOS_API_TOKEN = 'prueba';
     const resultado = await vehiculos.buscar(filtro);
     assert.equal(resultado.estado, 'ok');
     assert.equal(resultado.vehiculos[0].credencial, undefined);
     assert.equal(resultado.vehiculos[0].precio, 100);
+    assert.equal(resultado.vehiculos[0].vehiculoId, vehiculoId);
     assert.equal(resultado.vehiculos[0].vehiculo, 'moto');
     assert.equal(resultado.vehiculos[0].tipo, 'urbana');
     assert.equal(resultado.vehiculos[0].color, 'Rojo');
     assert.equal(resultado.vehiculos[0].estado, 'usado');
     assert.equal(resultado.vehiculos[0].detalle, 'Muy buen estado');
+    assert.equal(resultado.vehiculos[0].observacionesInternas, 'Confirmar entrega después de revisión de taller.');
     assert.equal(resultado.vehiculos[0].disponible, true);
     assert.equal(resultado.vehiculos[0].enlace, 'https://rpsbikes.com.ar/moto/corven');
     esperados = { marca: 'Corven', modelo: 'XXX' };
     await vehiculos.buscar({ marca: 'Corven', modelo: 'XXX', precioMinimo: null, precioMaximo: null });
     assert.equal(consultas, 2);
+    esperados = { vehiculoId };
+    await vehiculos.buscar({ marca: null, modelo: null, precioMinimo: null, precioMaximo: null, vehiculoId });
+    assert.equal(consultas, 3);
+    for (const invalido of ['no-es-un-id', 'g'.repeat(24), '507f1f77bcf86cd79943901', 123, { $ne: null }]) {
+        await assert.rejects(vehiculos.buscar({ vehiculoId: invalido }), /ID de vehículo inválido/);
+    }
+    assert.equal(consultas, 3);
 });

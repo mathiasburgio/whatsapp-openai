@@ -8,13 +8,15 @@ const envios = require('./envios');
 const colaMensajes = require('./colaMensajes');
 const accionesMensaje = require('./accionesMensaje');
 const accionesExternas = require('./accionesExternas');
+const mongoose = require('mongoose');
 
 const objeto = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const filtroSchema = objeto({
     marca: { type: ['string', 'null'] },
     modelo: { type: ['string', 'null'] },
     precioMinimo: { type: ['number', 'null'], minimum: 0 },
-    precioMaximo: { type: ['number', 'null'], minimum: 0 }
+    precioMaximo: { type: ['number', 'null'], minimum: 0 },
+    vehiculoId: { type: ['string', 'null'], pattern: '^[a-fA-F0-9]{24}$' }
 });
 const esquemas = {
     orquestador: objeto({ accion: { type: 'string', enum: ['responder', 'buscar_vehiculo', 'notify_seller'] }, filtro: filtroSchema,
@@ -27,6 +29,19 @@ const esquemas = {
 function pendientesExternos(conversacion) {
     return (conversacion.accionesExternasRequeridas || []).filter(item => !item.aceptada).slice(-3)
         .map(item => ({ id: String(item._id), detalle: item.detalle.slice(0, 250) }));
+}
+function referenciasCatalogo(mensaje) {
+    try {
+        const catalogo = JSON.parse(mensaje.parametroRecibido || 'null');
+        if (catalogo?.estado !== 'ok' || !Array.isArray(catalogo.vehiculos)) return [];
+        return catalogo.vehiculos.slice(0, 8).flatMap(item => {
+            const vehiculoId = [item?.vehiculoId, item?._id, item?.id]
+                .find(id => typeof id === 'string' && mongoose.isObjectIdOrHexString(id));
+            if (!vehiculoId) return [];
+            return [{ vehiculoId, ...Object.fromEntries(['marca', 'modelo', 'color', 'estado', 'enlace']
+                .filter(campo => item[campo] !== undefined).map(campo => [campo, item[campo]])) }];
+        });
+    } catch { return []; }
 }
 async function contexto(conversacion, mensaje, grupo = [mensaje]) {
     const recientes = await Mensaje.find({ conversacionId: conversacion._id, $or: [
@@ -48,6 +63,7 @@ async function contexto(conversacion, mensaje, grupo = [mensaje]) {
             texto: (item.contenidoOriginal ?? (item.esImagen || item.esAudio ? '' : item.contenido) ?? '').slice(0, 700),
             transcripcionAudio: item.transcripcionAudio?.slice(0, 700),
             inferenciaImagen: item.transcripcionImagen?.slice(0, 700),
+            vehiculosConsultados: referenciasCatalogo(item),
         })),
     };
     while (JSON.stringify(datos).length > 18000 && datos.mensajes.length > 1) datos.mensajes.shift();
@@ -63,7 +79,9 @@ function validarDecision(decision, grupo) {
     if (!Array.isArray(decision.solicitudesExternas) || decision.solicitudesExternas.some(item => !item || !ids.has(item.mensajeId)
         || typeof item.detalle !== 'string' || !item.detalle.trim() || item.detalle.length > 1000)
         || new Set(decision.solicitudesExternas.map(item => item.mensajeId)).size !== decision.solicitudesExternas.length) throw new Error('Solicitud externa inválida.');
-    if (Object.keys(decision.filtro).some(campo => !['marca', 'modelo', 'precioMinimo', 'precioMaximo'].includes(campo))) throw new Error('Filtro de moto inválido.');
+    if (Object.keys(decision.filtro).some(campo => !['marca', 'modelo', 'precioMinimo', 'precioMaximo', 'vehiculoId'].includes(campo))) throw new Error('Filtro de moto inválido.');
+    if (decision.filtro.vehiculoId !== null && (typeof decision.filtro.vehiculoId !== 'string'
+        || !mongoose.isObjectIdOrHexString(decision.filtro.vehiculoId))) throw new Error('ID de vehículo inválido.');
     for (const campo of ['marca', 'modelo']) {
         const valor = decision.filtro[campo];
         if (valor !== null && (typeof valor !== 'string' || !valor.trim() || valor.length > 80)) throw new Error('Filtro de moto inválido.');
@@ -191,7 +209,7 @@ async function responder(mensaje, grupo = [mensaje], control = {}) {
             }
             if (decision.mensajesFueraDeTema.length === grupo.length) {
                 decision.accion = 'responder';
-                decision.filtro = { marca: null, modelo: null, precioMinimo: null, precioMaximo: null };
+                decision.filtro = { marca: null, modelo: null, precioMinimo: null, precioMaximo: null, vehiculoId: null };
                 decision.motivo = 'Consulta fuera de tema: orientar al cliente a las consultas del comercio.';
                 decision.solicitudesExternas = [];
             }
@@ -261,10 +279,7 @@ async function responder(mensaje, grupo = [mensaje], control = {}) {
             await accionesMensaje.registrar(mensaje, 'responder', 'ok', { whatsappId });
             accionEnCurso = 'guardar_respuesta';
             const fechaEmitida = new Date();
-            const tiempoDesdeReferral = conversacion.referralFecha
-                ? fechaEmitida.getTime() - conversacion.referralFecha.getTime()
-                : NaN;
-            const bonificadoReferral = tiempoDesdeReferral >= 0 && tiempoDesdeReferral < 72 * 60 * 60 * 1000;
+            const bonificadoReferral = envios.bonificadoReferral(conversacion, fechaEmitida);
             salida = await Mensaje.create({ conversacionId: conversacion._id, whatsappId, respuestaA: mensaje._id,
                 respuestaAutomatica: true, deSistemaParaCliente: true, deClienteParaSistema: false,
                 emisor: mensaje.receptor, receptor: conversacion.telefono, contenido: respuesta.mensaje.trim(),

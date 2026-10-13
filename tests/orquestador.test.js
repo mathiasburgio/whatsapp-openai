@@ -54,6 +54,7 @@ function preparar(t, servicios = {}) {
         './prompts': { cargar: async () => ({ imagen: 'Describí con incertidumbre.', audio: 'Transcribí motos.' }) },
         './envios': {
             serializar: require('../services/envios').serializar,
+            bonificadoReferral: require('../services/envios').bonificadoReferral,
             verificarLimiteMensual: async () => {
                 const cantidad = mensajes.filter(item => item.deSistemaParaCliente && item.whatsappId).length;
                 if (cantidad >= (servicios.limite ?? 2000)) throw new Error('Se alcanzó el límite mensual de respuestas de WhatsApp.');
@@ -292,6 +293,23 @@ test('una respuesta manual se integra mientras una imagen está en proceso y no 
     assert.equal(conversaciones[0].tokens.total, 5);
     assert.equal(mensajes.length, 2);
     assert.equal(envios, 1);
+});
+
+test('los envíos del vendedor guardan la gracia según el referral vigente al enviar', async t => {
+    let envios = 0;
+    const { api, conversaciones, mensajes } = preparar(t, { whatsapp: { enviarMensaje: async () => ({ messages: [{ id: 'wamid.vendedor.' + ++envios }] }) } });
+    await api.recibirMensajeWhatsapp('5491112345678', 'Hola', undefined, undefined, { whatsappId: 'wamid.in' });
+    const conversacion = conversaciones[0], id = String(conversacion._id);
+    for (const dentro of [true, false]) {
+        conversacion.referralFecha = new Date(Date.now() - (dentro ? 1 : 73) * 60 * 60 * 1000);
+        const enviada = await api.responderMensajePorApiWhataspp(id, 'Respuesta del vendedor');
+        assert.equal(enviada.bonificadoReferral, dentro);
+        assert.equal(enviada.respuestaAutomatica, false);
+        assert.equal(conversacion.ultimoMensaje.bonificadoReferral, dentro);
+    }
+    conversacion.referralFecha = new Date();
+    assert.equal(mensajes[1].bonificadoReferral, true);
+    assert.equal(mensajes[2].bonificadoReferral, false);
 });
 
 test('un envío manual sin confirmación no crea mensaje y deja la conversación pendiente', async t => {

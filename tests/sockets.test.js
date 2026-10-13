@@ -120,7 +120,8 @@ test('el orquestador guarda el mensaje del vendedor y notifica después de persi
             pasos.push('whatsapp');
             return { messages: [{ id: 'wamid.test.' + (mensajes.length + 1) }] };
         } },
-        './envios': { serializar: require('../services/envios').serializar, verificarLimiteMensual: async () => {} },
+        './envios': { serializar: require('../services/envios').serializar,
+            bonificadoReferral: require('../services/envios').bonificadoReferral, verificarLimiteMensual: async () => {} },
         './sockets': { notificarCambios: async (actual, mensaje) => {
             pasos.push('broadcast');
             assert.equal(actual.ultimoMensaje._id.toString(), mensaje._id.toString());

@@ -282,7 +282,9 @@ async function mostrarMetricas() {
         const formato = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2 });
         $('#periodo-metricas').text(new Date(metricas.periodo.inicio).toLocaleDateString('es-AR', { month: 'long', year: 'numeric', timeZone: 'UTC' }) + ' · UTC');
         for (const [id, campo] of Object.entries({ web: 'llamadasWebSearch', textos: 'llamadasProcesarTexto', segundos: 'segundosProcesados',
-            tokens: 'tokensProcesados', imagenes: 'imagenesProcesadas', respuestas: 'respuestasAutomaticas' })) {
+            tokens: 'tokensProcesados', imagenes: 'imagenesProcesadas', respuestas: 'respuestasAutomaticas',
+            'whatsapp-totales': 'respuestasWhatsappTotales', 'whatsapp-con-gracia': 'respuestasWhatsappConGracia',
+            'whatsapp-sin-gracia': 'respuestasWhatsappSinGracia' })) {
             $('#metrica-' + id).text(formato.format(metricas[campo] ?? 0));
         }
         $('#metricas-detalle-tokens').text('Tokens de entrada: ' + formato.format(metricas.tokensEntrada) + ' · Tokens de salida: ' + formato.format(metricas.tokensSalida));
