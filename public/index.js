@@ -282,7 +282,10 @@ function listarConversaciones(){
     }).join('');
     $('#lista-conversaciones').html(html);
     $('#lista-conversaciones .conversacion').on('click', ev => {
-        obtenerMensajes($(ev.currentTarget).attr('data-conversacion-id'));
+        const conversacionId = $(ev.currentTarget).attr('data-conversacion-id');
+        const conversacion = conversaciones.find(c => c._id === conversacionId);
+        if (conversacion) console.log({ numero: conversacion.telefono, nombre: conversacion.nombre, conversacion });
+        obtenerMensajes(conversacionId);
     });
 }
 
