@@ -7,9 +7,13 @@ const sockets = require('./sockets');
 const envios = require('./envios');
 
 const objeto = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
-const filtroSchema = objeto({ marca: { type: ['string', 'null'] }, modelo: { type: ['string', 'null'] },
-    estado: { type: ['string', 'null'], enum: ['nuevo', 'usado', null] },
-    precio_minimo: { type: ['number', 'null'] }, precio_maximo: { type: ['number', 'null'] } });
+const filtroSchema = objeto({
+    marca: { type: ['string', 'null'] },
+    modelo: { type: ['string', 'null'] },
+    vehiculo: { type: ['string', 'null'] },
+    tipo: { type: ['string', 'null'] },
+    estado: { type: ['string', 'null'], enum: ['nuevo', 'usado', null] }
+});
 const esquemas = {
     orquestador: objeto({ accion: { type: 'string', enum: ['responder', 'buscar_vehiculo', 'notify_seller'] }, filtro: filtroSchema, motivo: { type: 'string' } }),
     respuesta: objeto({ mensaje: { type: 'string' } }),
@@ -37,17 +41,11 @@ async function contexto(conversacion, mensaje) {
 function validarDecision(decision) {
     if (!decision || !['responder', 'buscar_vehiculo', 'notify_seller'].includes(decision.accion)
         || typeof decision.motivo !== 'string' || decision.motivo.length > 1000 || !decision.filtro) throw new Error('Decisión del bot inválida.');
-    for (const campo of ['marca', 'modelo']) {
+    for (const campo of ['marca', 'modelo', 'vehiculo', 'tipo']) {
         const valor = decision.filtro[campo];
         if (valor !== null && (typeof valor !== 'string' || !valor.trim() || valor.length > 80)) throw new Error('Filtro de moto inválido.');
     }
     if (![null, 'nuevo', 'usado'].includes(decision.filtro.estado)) throw new Error('Estado de moto inválido.');
-    for (const campo of ['precio_minimo', 'precio_maximo']) {
-        const valor = decision.filtro[campo];
-        if (valor !== null && (!Number.isFinite(valor) || valor < 0)) throw new Error('Filtro de precio inválido.');
-    }
-    const { precio_minimo: min, precio_maximo: max } = decision.filtro;
-    if (min !== null && max !== null && min > max) throw new Error('Rango de precios inválido.');
     if (decision.accion === 'buscar_vehiculo' && !Object.values(decision.filtro).some(valor => valor !== null)) throw new Error('La búsqueda necesita al menos un filtro.');
 }
 async function derivar(conversacionId, motivo) {

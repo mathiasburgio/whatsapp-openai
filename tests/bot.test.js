@@ -23,7 +23,7 @@ function preparar(t, opciones = {}) {
         for (const [campo, valor] of Object.entries(update.$push || {})) conversacion[campo].push(valor);
         return conversacion;
     }
-    const filtro = { marca: null, modelo: null, estado: null, precio_minimo: null, precio_maximo: null };
+    const filtro = { marca: null, modelo: null, vehiculo: null, tipo: null, estado: null };
     const mocks = {
         '../models/conversacion': { findById: async () => conversacion,
             updateOne: async (_, update) => actualizar(update), findOneAndUpdate: async (_, update) => actualizar(update) },
@@ -53,7 +53,7 @@ function preparar(t, opciones = {}) {
             if (etapa === 'orquestador') resultado = opciones.decision || { accion: 'responder', filtro, motivo: 'Saludo' };
             if (etapa === 'respuesta') {
                 if (opciones.apagarDuranteGeneracion) conversacion.botActivo = false;
-                resultado = { mensaje: 'Hola, ¿qué moto te interesa?' };
+                resultado = { mensaje: opciones.respuesta || 'Hola, ¿qué moto te interesa?' };
             }
             if (etapa === 'resumen') {
                 if (opciones.fallarResumen) throw new Error('Resumen agotado');
@@ -63,7 +63,7 @@ function preparar(t, opciones = {}) {
         } },
         './vehiculos': { disponible: () => opciones.catalogo ?? false, buscar: async filtro => {
             if (!opciones.catalogo) return { estado: 'sin_configurar', vehiculos: [] };
-            return { estado: 'ok', vehiculos: [{ marca: filtro.marca, modelo: filtro.modelo, precio: 100, moneda: 'ARS' }] };
+            return { estado: 'ok', vehiculos: opciones.vehiculos || [{ marca: filtro.marca, modelo: filtro.modelo, precio: 100, moneda: 'ARS' }] };
         } },
         './whatsapp': { enviarMensaje: async datos => {
             envios.push(datos); if (opciones.fallarEnvio) throw new Error('Tiempo de espera agotado');
@@ -115,7 +115,7 @@ test('si se apaga durante la generación, no envía y conserva el consumo', asyn
 });
 test('sin catálogo confirma la derivación, pausa el bot y avisa en el panel', async t => {
     const { api, entrada, conversacion, llamadas, envios } = preparar(t, { decision: {
-        accion: 'buscar_vehiculo', filtro: { marca: 'Corven', modelo: 'XXX', estado: 'nuevo', precio_minimo: null, precio_maximo: null }, motivo: 'Consulta precio' } });
+        accion: 'buscar_vehiculo', filtro: { marca: 'Corven', modelo: 'XXX', vehiculo: null, tipo: null, estado: 'nuevo' }, motivo: 'Consulta precio' } });
     await api.responder(entrada);
     assert.equal(llamadas[1].datos.catalogo.estado, 'sin_configurar');
     assert.equal(llamadas[1].datos.decision.accion, 'notify_seller');
@@ -159,4 +159,30 @@ test('el resumen usa el historial y un fallo de memoria no repite una respuesta'
     assert.equal(fallido.entrada.estadoBot, 'respondido');
     await fallido.api.responder(fallido.entrada);
     assert.equal(fallido.envios.length, 1);
+});
+
+test('una preferencia de color se conserva para redactar después de consultar el catálogo', async t => {
+    const enlace = 'https://rpsbikes.com.ar/moto/navi';
+    const filtro = { marca: 'Honda', modelo: 'Navi', vehiculo: null, tipo: null, estado: null };
+    const { api, entrada, llamadas, mensajes, conversacion } = preparar(t, {
+        catalogo: true,
+        decision: { accion: 'buscar_vehiculo', filtro, motivo: 'Consulta de precio con preferencia de color.' },
+        vehiculos: [{ marca: 'Honda', modelo: 'Navi', color: 'Blanco', precio: 100, disponible: true, enlace }],
+        respuesta: 'Tengo una Honda Navi blanca disponible. Su precio es 100. ' + enlace,
+    });
+    entrada.contenidoOriginal = 'Quiero una Honda Navi blanca, ¿en qué precio la tenés?';
+    await api.responder(entrada);
+    assert.equal(llamadas.length, 2);
+    assert.equal(llamadas[0].config.esquema.nombre, 'orquestador');
+    assert.deepEqual(Object.keys(llamadas[0].config.esquema.schema.properties.filtro.properties).sort(),
+        ['estado', 'marca', 'modelo', 'tipo', 'vehiculo']);
+    assert.equal(llamadas[1].config.esquema.nombre, 'respuesta');
+    assert.equal(llamadas[1].datos.mensajes.at(-1).texto, entrada.contenidoOriginal);
+    assert.deepEqual(llamadas[1].datos.decision.filtro, filtro);
+    assert.equal(llamadas[1].datos.catalogo.estado, 'ok');
+    assert.equal(llamadas[1].datos.catalogo.vehiculos[0].color, 'Blanco');
+    assert.equal(llamadas[1].datos.catalogo.vehiculos[0].enlace, enlace);
+    assert.equal(entrada.accionEjecutada, 'buscar_vehiculo');
+    assert.equal(conversacion.botActivo, true);
+    assert.equal(mensajes[1].contenido.includes(enlace), true);
 });

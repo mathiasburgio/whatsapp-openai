@@ -3,7 +3,7 @@ async function buscar(filtro) {
     if (!disponible()) return { estado: 'sin_configurar', vehiculos: [] };
     const url = new URL(process.env.VEHICULOS_API_URL || 'https://rpsbikes.com.ar/buscar');
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('URL del catálogo inválida.');
-    for (const campo of ['marca', 'modelo', 'estado', 'precioMinimo', 'precioMaximo']) {
+    for (const campo of ['marca', 'modelo', 'vehiculo', 'tipo', 'estado']) {
         if (filtro[campo] !== null && filtro[campo] !== undefined) url.searchParams.set(campo, String(filtro[campo]));
     }
     const headers = { Accept: 'application/json' };
@@ -22,7 +22,7 @@ async function buscar(filtro) {
     if (!Array.isArray(vehiculos) || vehiculos.some(item => !item || typeof item !== 'object' || Array.isArray(item))) throw new Error('Respuesta del catálogo inválida: se esperaba un array o { vehiculos: [] }.');
     // Proyecta los datos comerciales sin pasar campos internos o credenciales al modelo.
     const resultados = vehiculos.slice(0, 8).map(vehiculo => Object.fromEntries(
-        ['id', '_id', 'marca', 'modelo', 'anio', 'version', 'estado', 'color', 'precio', 'moneda', 'disponible', 'detalle', 'financiacion', 'url', 'enlace']
+        ['id', '_id', 'marca', 'modelo', 'vehiculo', 'tipo', 'anio', 'version', 'estado', 'color', 'precio', 'moneda', 'disponible', 'detalle', 'financiacion', 'url', 'enlace']
             .filter(campo => vehiculo[campo] !== undefined).map(campo => [campo, vehiculo[campo]])));
     if (JSON.stringify(resultados).length > 8000) throw new Error('Los datos del catálogo exceden el tamaño permitido para responder.');
     return { estado: resultados.length ? 'ok' : 'sin_resultados', consultadoEn: new Date().toISOString(), vehiculos: resultados };
