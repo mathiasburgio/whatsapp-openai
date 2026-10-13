@@ -3,8 +3,12 @@ async function buscar(filtro) {
     if (!disponible()) return { estado: 'sin_configurar', vehiculos: [] };
     const url = new URL(process.env.VEHICULOS_API_URL || 'https://rpsbikes.com.ar/buscar');
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('URL del catálogo inválida.');
-    for (const campo of ['marca', 'modelo', 'vehiculo', 'tipo', 'estado']) {
+    const campos = ['marca', 'modelo', 'precioMinimo', 'precioMaximo'];
+    // Evita que la URL configurada conserve filtros anteriores, como estado=nuevo.
+    for (const campo of [...url.searchParams.keys()]) if (!campos.includes(campo)) url.searchParams.delete(campo);
+    for (const campo of campos) {
         if (filtro[campo] !== null && filtro[campo] !== undefined) url.searchParams.set(campo, String(filtro[campo]));
+        else url.searchParams.delete(campo);
     }
     const headers = { Accept: 'application/json' };
     if (process.env.VEHICULOS_API_TOKEN) headers.Authorization = 'Bearer ' + process.env.VEHICULOS_API_TOKEN;

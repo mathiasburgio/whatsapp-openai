@@ -7,6 +7,8 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const prompts = require('./prompts');
 const bot = require('./bot');
+const accionesMensaje = require('./accionesMensaje');
+const accionesExternas = require('./accionesExternas');
 const envios = require('./envios');
 const mongoose = require('mongoose');
 const pendientesPorTelefono = new Map();
@@ -81,7 +83,8 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
                 contenido: contenido || (imagen ? '[Imagen]' : audio ? '[Audio]' : ''), deClienteParaSistema: true, deSistemaParaCliente: false,
                 esImagen: !!imagen, esAudio: !!audio, usoLLM: false,
                 estadoBot: conversacion.botActivo ? 'pendiente' : 'omitido',
-                fechaEmitida, referral, crudo: datos.crudo });
+                fechaEmitida, referral, crudo: datos.crudo,
+                acciones: [{ accion: 'recibir', estado: 'ok', fecha: new Date(), detalle: { tipo: imagen ? 'imagen' : audio ? 'audio' : 'texto' } }] });
         } catch (error) {
             if (error.code === 11000 && datos.whatsappId) return { mensaje: await Mensaje.findOne({ whatsappId: datos.whatsappId }), duplicado: true };
             throw error;
@@ -91,33 +94,45 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
     await actualizarConversacion(conversacion, mensaje);
     let respuestaOpenAi = null;
     let falloProcesamiento = false;
+    let accionMedia;
     const respuestas = [];
     try {
         if (imagen || audio) {
-            const archivoImagen = imagen && !mensaje.transcripcionImagen
-                ? await descargarMedia(imagen, 'imagen', mensaje, datos.phoneNumberId) : null;
-            const archivoAudio = audio && !mensaje.transcripcionAudio
-                ? await descargarMedia(audio, 'audio', mensaje, datos.phoneNumberId) : null;
             const configuracion = await prompts.cargar();
             const opciones = { conversacionId: conversacion._id, mensajeId: mensaje._id };
-            if (archivoImagen) {
+            if (imagen && !mensaje.transcripcionImagen) {
+                accionMedia = 'descargar_imagen';
+                await accionesMensaje.registrar(mensaje, accionMedia, 'iniciada');
+                const archivoImagen = await descargarMedia(imagen, 'imagen', mensaje, datos.phoneNumberId);
+                await accionesMensaje.registrar(mensaje, accionMedia, 'ok', { mimeType: archivoImagen.mimeType });
+                accionMedia = 'interpretar_imagen';
+                await accionesMensaje.registrar(mensaje, accionMedia, 'iniciada');
                 const imagenUrl = `data:${archivoImagen.mimeType};base64,${archivoImagen.buffer.toString('base64')}`;
                 mensaje.usoLLM = true;
                 const respuesta = await openai.procesarImagen(imagenUrl, contenido || 'Describí qué hay en esta imagen.',
                     { ...opciones, instrucciones: configuracion.imagen });
                 mensaje.transcripcionImagen = respuesta.resultado;
                 respuestas.push(respuesta);
+                await accionesMensaje.registrar(mensaje, accionMedia, 'ok');
             }
-            if (archivoAudio) {
+            if (audio && !mensaje.transcripcionAudio) {
+                accionMedia = 'descargar_audio';
+                await accionesMensaje.registrar(mensaje, accionMedia, 'iniciada');
+                const archivoAudio = await descargarMedia(audio, 'audio', mensaje, datos.phoneNumberId);
+                await accionesMensaje.registrar(mensaje, accionMedia, 'ok', { mimeType: archivoAudio.mimeType });
+                accionMedia = 'transcribir_audio';
+                await accionesMensaje.registrar(mensaje, accionMedia, 'iniciada');
                 mensaje.usoLLM = true;
                 const respuesta = await openai.transcribirAudio(archivoAudio.buffer, archivoAudio.mimeType, { ...opciones, prompt: configuracion.audio });
                 mensaje.transcripcionAudio = respuesta.resultado;
                 respuestas.push(respuesta);
+                await accionesMensaje.registrar(mensaje, accionMedia, 'ok');
             }
         }
     } catch (error) {
         falloProcesamiento = true;
         mensaje.estadoBot = 'omitido';
+        await accionesMensaje.registrar(mensaje, accionMedia || 'procesar_archivo', 'error', { error: error.message });
         console.error('No se pudo procesar el mensaje de WhatsApp:', error);
     } finally {
         respuestaOpenAi = [mensaje.transcripcionImagen, mensaje.transcripcionAudio].filter(Boolean).join('\n') || null;
@@ -132,7 +147,7 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
         console.log({ mensaje: mensaje.contenido, respuestaOpenAi });
     }
     if (falloProcesamiento) return { conversacion, mensaje, respuestaOpenAi };
-    try { bot.encolar(mensaje); }
+    try { await bot.encolar(mensaje); }
     catch (error) { console.error('No se pudo guardar el estado del bot:', error.message); }
     return { conversacion, mensaje, respuestaOpenAi };
 }
@@ -143,12 +158,8 @@ function responderMensajePorApiWhataspp(conversacionId, contenido, datos = {}) {
     return enviarMensajeVendedor(conversacionId, contenido.trim(), datos);
 }
 async function enviarMensajeVendedor(conversacionId, contenido, datos) {
-    // Pausa de inmediato, sin esperar las llamadas a IA que puedan estar en curso.
-    const conversacion = await Conversacion.findOneAndUpdate({ _id: conversacionId }, {
-        $set: { botActivo: false },
-    }, { returnDocument: 'after' });
+    const conversacion = await Conversacion.findById(conversacionId);
     if (!conversacion?.telefono) throw new Error('La conversación no tiene teléfono de contacto.');
-    await bot.cancelarEspera(conversacionId);
     const recibido = await Mensaje.findOne({ conversacionId, deClienteParaSistema: true }).sort({ createdAt: -1, _id: -1 });
     let mensaje;
     try {
@@ -163,14 +174,15 @@ async function enviarMensajeVendedor(conversacionId, contenido, datos) {
                 vendedorId: datos.usuarioId, deClienteParaSistema: false, deSistemaParaCliente: true,
                 respuestaAutomatica: false, usoLLM: false, whatsappId, crudo, fechaEmitida: new Date() });
             await Conversacion.findOneAndUpdate({ _id: conversacionId }, { $set: {
-                deClienteParaSistema: false, ultimoMensaje: mensaje.toObject(), requiereAtencion: false, motivoDerivacion: '',
+                deClienteParaSistema: false, ultimoMensaje: mensaje.toObject(),
             } });
         });
     } catch (error) {
         console.error('No se pudo enviar el mensaje del vendedor:', error);
-        if (!mensaje) await Conversacion.updateOne({ _id: conversacionId }, { $set: {
-            requiereAtencion: true, motivoDerivacion: 'No se pudo confirmar el envío del vendedor.',
-        } });
+        if (!mensaje) {
+            const actualizada = await accionesExternas.requerir(conversacionId, 'No se pudo confirmar el envío del vendedor.');
+            await sockets.notificarCambios(actualizada);
+        }
         throw error;
     }
     await sockets.notificarCambios(await Conversacion.findById(conversacionId), mensaje);

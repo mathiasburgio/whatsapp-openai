@@ -1,6 +1,7 @@
 let conversaciones = [];
 let conversacionActual = null;
 let mensajes = [];
+let mensajeDetalleId = null;
 let paginaMensajes = 0;
 let cargandoMensajes = false;
 let hayMasMensajes = false;
@@ -58,6 +59,7 @@ function recibirCambios({ conversacion, mensaje }) {
         if (posicion === -1) mensajes.push(mensaje);
         else mensajes[posicion] = mensaje;
         listarMensajes();
+        if (mensajeDetalleId === String(mensaje._id)) mostrarDetalleMensaje(mensajeDetalleId);
     }
 }
 
@@ -155,10 +157,13 @@ async function obtenerConversaciones(){
 }
 
 function faltaResponder(conversacion) {
-    return !!conversacion.requiereAtencion || !!conversacion.ultimoMensaje?.deClienteParaSistema;
+    return accionesPendientes(conversacion).length > 0 || !!conversacion.ultimoMensaje?.deClienteParaSistema;
+}
+function accionesPendientes(conversacion) {
+    return (conversacion?.accionesExternasRequeridas || []).filter(accion => !accion.aceptada);
 }
 function ordenarConversaciones(lista) {
-    return [...lista].sort((a, b) => Number(!!b.requiereAtencion) - Number(!!a.requiereAtencion)
+    return [...lista].sort((a, b) => Number(accionesPendientes(b).length > 0) - Number(accionesPendientes(a).length > 0)
         || (new Date(b.updatedAt || b.ultimoMensaje?.fechaEmitida).getTime() || 0) - (new Date(a.updatedAt || a.ultimoMensaje?.fechaEmitida).getTime() || 0));
 }
 function cambiarVistaListado(modo) {
@@ -181,11 +186,31 @@ function actualizarControlBot() {
     $('#estado-bot').text(botActivo ? 'Bot activo' : 'Bot inactivo');
     $('.control-bot').attr('data-activo', String(botActivo));
 
-    $('#atencion-vendedor').prop('hidden', !conversacionActual?.requiereAtencion);
-    $('#motivo-vendedor').text(conversacionActual?.motivoDerivacion || 'Consulta derivada.');
+    const pendientes = accionesPendientes(conversacionActual);
+    $('#atencion-vendedor').prop('hidden', !pendientes.length);
+    $('#contador-intervenciones').text(pendientes.length);
+    $('#acciones-externas-pendientes').html(pendientes.map(accion => `
+        <div class="accion-externa-pendiente">
+            <p>${escaparHtml(accion.detalle)}</p>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-aceptar-accion="${escaparHtml(accion._id)}">Marcar atendida</button>
+        </div>`).join(''));
     $('#resumen-conversacion').text(conversacionActual
         ? conversacionActual.resumen || 'Todavía no hay un resumen generado.'
         : 'Seleccioná una conversación.');
+}
+
+async function aceptarAccionExterna(ev) {
+    const conversacion = conversacionActual;
+    if (!conversacion) return;
+    const boton = $(ev.currentTarget);
+    boton.prop('disabled', true);
+    try {
+        const actualizada = await $.post({ url: '/conversaciones/aceptar-accion-externa', contentType: 'application/json',
+            data: JSON.stringify({ conversacionId: conversacion._id, accionId: boton.attr('data-aceptar-accion') }) });
+        if (conversaciones.some(item => item._id === conversacion._id)) recibirCambios({ conversacion: actualizada });
+    } catch (error) {
+        Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudo marcar la intervención como atendida.' });
+    } finally { boton.prop('disabled', false); }
 }
 
 async function cambiarEstadoBot() {
@@ -213,12 +238,14 @@ function mostrarDetalleMensaje(mensajeId) {
     const mensaje = mensajes.find(item => String(item._id) === mensajeId);
     if (!mensaje) return;
 
+    mensajeDetalleId = mensajeId;
     $('#mensaje-json').text(JSON.stringify(mensaje, null, 2));
     const modal = document.getElementById('modal-mensaje');
     if (!modal.open) modal.showModal();
 }
 
 function cerrarDetalleMensaje() {
+    mensajeDetalleId = null;
     const modal = document.getElementById('modal-mensaje');
     if (modal?.open) modal.close();
     $('#mensaje-json').text('');
@@ -277,13 +304,14 @@ function listarConversaciones(){
         const ultimoMensaje = conversacion.ultimoMensaje;
         const enviado = ultimoMensaje?.deSistemaParaCliente;
         const estado = ultimoMensaje?.fechaLeida ? 'leido' : ultimoMensaje?.fechaEntregada ? 'entregado' : 'emitido';
-        const leadGuardado = conversacion.requiereAtencion ? 'derivación' : conversacion.intereses?.at(-1)?.lead?.toLowerCase();
+        const pendientes = accionesPendientes(conversacion);
+        const leadGuardado = pendientes.length ? 'derivación' : conversacion.intereses?.at(-1)?.lead?.toLowerCase();
         const lead = { frio: 'cold', frío: 'cold', cold: 'cold', tibio: 'warm', warm: 'warm',
             caliente: 'hot', hot: 'hot', derivación: 'handoff', derivacion: 'handoff', handoff: 'handoff' }[leadGuardado] || 'cold';
         const seleccionada = conversacionActual?._id === conversacion._id;
         const estadoTexto = { leido: 'Leído', entregado: 'Entregado', emitido: 'Enviado' }[estado];
         return `
-            <button type="button" class="conversacion ${seleccionada ? 'seleccionada' : ''} ${conversacion.requiereAtencion ? 'requiere-vendedor' : ''}"
+            <button type="button" class="conversacion ${seleccionada ? 'seleccionada' : ''} ${pendientes.length ? 'requiere-vendedor' : ''}"
                 data-conversacion-id="${escaparHtml(conversacion._id)}" ${seleccionada ? 'aria-current="true"' : ''}>
                 <span class="nombre-contacto">${escaparHtml(nombre)}</span>
                 <span class="telefono-contacto">${escaparHtml(telefono)}</span>
@@ -297,7 +325,7 @@ function listarConversaciones(){
                     </span>
                 </span>
                 <span class="tags-conversacion">
-                    ${conversacion.requiereAtencion ? '<span class="badge tag lead-warm">Requiere vendedor</span>' : ''}
+                    ${pendientes.length ? '<span class="badge tag lead-warm">Intervenciones pendientes: ' + pendientes.length + '</span>' : ''}
                     <span class="badge tag lead-${lead}">${lead}</span>
                     <span class="badge tag bot-${conversacion.botActivo ? 'activo' : 'inactivo'}">
                         <i class="fa-solid fa-circle" aria-hidden="true"></i>
@@ -574,7 +602,7 @@ $('#mensajes').on('dblclick', '.mensaje', ev => {
     mostrarDetalleMensaje($(ev.currentTarget).attr('data-mensaje-id'));
 });
 $('[data-cerrar-mensaje]').on('click', cerrarDetalleMensaje);
-$('#modal-mensaje').on('close', () => $('#mensaje-json').text(''));
+$('#modal-mensaje').on('close', () => { mensajeDetalleId = null; $('#mensaje-json').text(''); });
 $('#btn-orden-ultimas').on('click', () => cambiarVistaListado('ultimas'));
 $('#btn-orden-pendientes').on('click', () => cambiarVistaListado('pendientes'));
 $('#buscar-conversacion').on('input', listarConversaciones);
@@ -583,6 +611,7 @@ $('#btn-cerrar-sesion').on('click', cerrarSesion);
 $('#btn-metricas').on('click', mostrarMetricas);
 $('[data-cerrar-metricas]').on('click', cerrarMetricas);
 $('#bot-activo').on('change', cambiarEstadoBot);
+$('#acciones-externas-pendientes').on('click', '[data-aceptar-accion]', aceptarAccionExterna);
 $('#texto-mensaje').on('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.originalEvent.isComposing) {
         ev.preventDefault();

@@ -20,7 +20,7 @@ async function iniciar() {
         contenidoOriginal: 'Más info de CORVEN XXX', contenido: 'Más info de CORVEN XXX', deClienteParaSistema: true,
         fechaEmitida: new Date().toISOString() };
     const conversacion = { _id: entrada.conversacionId, nombre: 'Cliente de prueba', telefono: '5491100000000', botActivo: false,
-        requiereAtencion: true, motivoDerivacion: 'Necesita confirmar precio con el vendedor.', updatedAt: '2026-01-01T00:00:00Z',
+        accionesExternasRequeridas: [{ _id: entrada._id, fecha: new Date().toISOString(), detalle: 'Evaluar moto usada como parte de pago.', aceptada: false }], updatedAt: '2026-01-01T00:00:00Z',
         ultimoMensaje: entrada };
     const pendientes = { _id: '507f1f77bcf86cd799439021', nombre: 'Consulta reciente', telefono: '5491100000001', updatedAt: new Date().toISOString(),
         botActivo: false, ultimoMensaje: { deClienteParaSistema: true, contenido: 'Hola' } };
@@ -31,7 +31,7 @@ async function iniciar() {
     const servidor = http.createServer(app), io = new Server(servidor);
     app.use(express.json());
     app.get('/sesion/activa', (req, res) => res.json(true));
-    app.get('/conversaciones/obtener', (req, res) => res.json(conversaciones.filter(item => req.query.orden !== 'pendientes' || item.requiereAtencion || item.ultimoMensaje.deClienteParaSistema)));
+    app.get('/conversaciones/obtener', (req, res) => res.json(conversaciones.filter(item => req.query.orden !== 'pendientes' || item.accionesExternasRequeridas?.some(accion => !accion.aceptada) || item.ultimoMensaje.deClienteParaSistema)));
     app.get('/conversacion/mensajes', (req, res) => res.json(mensajes.filter(item => item.conversacionId === req.query.conversacionId).slice().reverse()));
     function cambiarEstadoBot(botActivo) { return (req, res) => {
         const actual = conversaciones.find(item => item._id === req.body.conversacionId);
@@ -40,13 +40,20 @@ async function iniciar() {
     }; }
     app.post('/conversaciones/habilitar-bot', cambiarEstadoBot(true));
     app.post('/conversaciones/deshabilitar-bot', cambiarEstadoBot(false));
+    app.post('/conversaciones/aceptar-accion-externa', (req, res) => {
+        const actual = conversaciones.find(item => item._id === req.body.conversacionId);
+        const accion = actual?.accionesExternasRequeridas?.find(item => item._id === req.body.accionId);
+        if (!accion) return res.status(404).json({ error: 'Intervención no encontrada.' });
+        accion.aceptada = true;
+        io.emit('cambios', { conversacion: actual }); res.json(actual);
+    });
     io.on('connection', socket => socket.on('enviar-mensaje', (datos, responder) => {
         const actual = conversaciones.find(item => item._id === datos.conversacionId);
         const mensaje = { _id: 'preview-' + mensajes.length, conversacionId: actual._id, contenido: datos.contenido,
             deSistemaParaCliente: true, respuestaAutomatica: false,
             whatsappId: 'wamid.preview.' + mensajes.length, fechaEmitida: new Date().toISOString() };
         mensajes.push(mensaje);
-        Object.assign(actual, { botActivo: false, requiereAtencion: false, motivoDerivacion: '', ultimoMensaje: mensaje, updatedAt: mensaje.fechaEmitida });
+        Object.assign(actual, { ultimoMensaje: mensaje, updatedAt: mensaje.fechaEmitida });
         io.emit('cambios', { conversacion: actual, mensaje }); responder({ mensaje });
     }));
     app.post('/sesion/cerrar', (req, res) => res.json({ ok: true }));

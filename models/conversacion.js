@@ -8,8 +8,15 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
     resumen: String, //resumen de la conversacion q va generando el bot
     turnosDesdeResumen: { type: Number, default: 0 },
     referralFecha: Date, //último ingreso desde un anuncio de Meta
-    requiereAtencion: { type: Boolean, default: false },
-    motivoDerivacion: String,
+    consultasFueraDeTema: [new mongoose.Schema({
+        fecha: { type: Date, required: true },
+        mensajeId: { type: oid, required: true },
+    }, { _id: false })],
+    accionesExternasRequeridas: [{
+        fecha: { type: Date, required: true },
+        detalle: { type: String, required: true },
+        aceptada: { type: Boolean, default: false },
+    }],
     botActivo: { type: Boolean, default: false }, //si debe auto-contestar el LLM
     ultimoMensaje: mixed, //copia del schema de "mensaje"
 
@@ -27,6 +34,7 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
     }],
     
     notificacion: [
+        // Historial anterior. Las intervenciones nuevas se guardan en accionesExternasRequeridas.
         {
             lead: String, //frio, tibio, caliente, derivación
             resumen: String, //se genera un resumen de la notificación
@@ -45,7 +53,7 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
 
 // Permite buscar las conversaciones de un teléfono por actualización.
 conversacionSchema.index({ telefono: 1, updatedAt: -1 });
-conversacionSchema.index({ requiereAtencion: -1, updatedAt: -1, _id: -1 });
+conversacionSchema.index({ 'accionesExternasRequeridas.aceptada': 1, updatedAt: -1, _id: -1 });
 module.exports = mongoose.model('Conversacion', conversacionSchema);
 
 /*
@@ -64,5 +72,5 @@ Lead:
 
     Derivación — handoff - derivación
         "¿Puedo pasar mañana a comprarla?"
-        Se deriva al vendedor y se suspende la respuesta automática.
+        Se registra una intervención pendiente del vendedor y el bot sigue respondiendo.
 */

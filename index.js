@@ -18,6 +18,7 @@ const socketsService = require('./services/sockets');
 const mongoService = require('./services/mongo');
 const usuarioService = require('./services/usuarios');
 const botService = require('./services/bot');
+const accionesExternasService = require('./services/accionesExternas');
 
 const cUsuarios = require('./models/usuarios');
 const cConversaciones = require('./models/conversacion');
@@ -73,13 +74,17 @@ app.get('/conversaciones/obtener', tieneSesion, async (req, res)=>{
         let query = noLeidas === 'true' || noLeidas === '1'
             ? { 'ultimoMensaje.deClienteParaSistema': true, 'ultimoMensaje.fechaLeida': null } : {};
         if (req.query.orden === 'pendientes') {
-            const pendientes = { $or: [{ requiereAtencion: true }, { 'ultimoMensaje.deClienteParaSistema': true }] };
+            const pendientes = { $or: [{ accionesExternasRequeridas: { $elemMatch: { aceptada: { $ne: true } } } }, { 'ultimoMensaje.deClienteParaSistema': true }] };
             query = Object.keys(query).length ? { $and: [query, pendientes] } : pendientes;
         }
-        const conversaciones = await cConversaciones
-            .find(query)
-            .sort({ requiereAtencion: -1, updatedAt: -1, _id: -1 })
-            .limit(300)
+        const conversaciones = await cConversaciones.aggregate([
+            { $match: query },
+            { $addFields: { __pendiente: { $anyElementTrue: [{ $map: {
+                input: { $ifNull: ['$accionesExternasRequeridas', []] }, as: 'accion', in: { $ne: ['$$accion.aceptada', true] },
+            } }] } } },
+            { $sort: { __pendiente: -1, updatedAt: -1, _id: -1 } },
+            { $limit: 300 }, { $project: { __pendiente: 0 } },
+        ]);
         res.json(conversaciones);
     }catch(error){
         console.error(error);
@@ -130,6 +135,22 @@ function cambiarEstadoBot(botActivo) {
 }
 app.post('/conversaciones/habilitar-bot', tieneSesion, cambiarEstadoBot(true));
 app.post('/conversaciones/deshabilitar-bot', tieneSesion, cambiarEstadoBot(false));
+
+app.post('/conversaciones/aceptar-accion-externa', tieneSesion, async (req, res) => {
+    try {
+        const { conversacionId, accionId } = req.body || {};
+        if (!mongoose.isObjectIdOrHexString(conversacionId) || !mongoose.isObjectIdOrHexString(accionId)) {
+            return res.status(400).json({ error: 'Indicá una conversación y una intervención válidas.' });
+        }
+        const conversacion = await accionesExternasService.aceptar(conversacionId, accionId);
+        if (!conversacion) return res.status(404).json({ error: 'Intervención no encontrada.' });
+        await socketsService.notificarCambios(conversacion);
+        res.json(conversacion);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'No se pudo marcar la intervención como atendida.' });
+    }
+});
 
 // Devuelve las métricas de un mes UTC. ?anio=YYYY&mes=M permite elegir el período;
 // cada parámetro omitido toma el año o mes actual del reloj del servidor.

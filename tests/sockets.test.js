@@ -100,7 +100,7 @@ test('sockets comparte la sesión, valida conexiones y envíos, y filtra el broa
 test('el orquestador guarda el mensaje del vendedor y notifica después de persistir la conversación', async () => {
     const id = new mongoose.Types.ObjectId();
     const conversacion = new Conversacion({
-        _id: id, telefono: '5491112345678',
+        _id: id, telefono: '5491112345678', botActivo: true,
         ultimoMensaje: { deClienteParaSistema: true, emisor: '5491112345678', receptor: '5491198765432' },
     });
     const pasos = [];
@@ -138,10 +138,10 @@ test('el orquestador guarda el mensaje del vendedor y notifica después de persi
         assert.equal(mensaje.whatsappId, 'wamid.test.' + numero);
         assert.equal(mensaje.respuestaAutomatica, false);
         assert(mensaje.fechaEmitida instanceof Date);
-        assert.equal(conversacion.botActivo, false);
+        assert.equal(conversacion.botActivo, true);
         assert.equal(conversacion.deClienteParaSistema, false);
     }
-    assert.deepEqual(pasos, ['pausa', 'whatsapp', 'mensaje', 'conversacion', 'broadcast', 'pausa', 'whatsapp', 'mensaje', 'conversacion', 'broadcast']);
+    assert.deepEqual(pasos, ['whatsapp', 'mensaje', 'conversacion', 'broadcast', 'whatsapp', 'mensaje', 'conversacion', 'broadcast']);
 });
 
 test('el panel no duplica el mensaje al recibir el broadcast y la confirmación', async () => {

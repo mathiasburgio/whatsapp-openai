@@ -28,18 +28,20 @@ function preparar(t, servicios = {}) {
             findOneAndUpdate: async (query, update) => {
                 const doc = conversaciones.find(item => String(item._id) === String(query._id));
                 if (query.$or && doc.ultimoMensaje?.fechaEmitida && new Date(doc.ultimoMensaje.fechaEmitida) > query.$or[1]['ultimoMensaje.fechaEmitida'].$lte) return null;
-                for (const [campo, valor] of Object.entries(update.$set)) doc.set(campo, valor);
+                for (const [campo, valor] of Object.entries(update.$set || {})) doc.set(campo, valor);
+                for (const [campo, valor] of Object.entries(update.$push || {})) doc[campo].push(valor);
                 for (const [campo, valor] of Object.entries(update.$inc || {})) doc.set(campo, (doc.get(campo) || 0) + valor);
                 return doc;
             },
         },
         '../models/mensaje': {
+            updateOne: async () => {},
             findOne: query => query.whatsappId ? Promise.resolve(mensajes.find(item => item.whatsappId === query.whatsappId))
                 : { sort: async () => [...mensajes].reverse().find(item => String(item.conversacionId) === String(query.conversacionId) && item.deClienteParaSistema) },
             create: datos => persistir(new Mensaje(datos), mensajes),
         },
         './sockets': { notificarCambios: async (conversacion, mensaje) => {
-            cambios.push({ conversacion: conversacion.toObject(), mensaje: mensaje.toObject() });
+            cambios.push({ conversacion: conversacion?.toObject(), mensaje: mensaje?.toObject() });
         } },
         './whatsapp': servicios.whatsapp || { obtenerMediaDesdeWhatsapp: async () => assert.fail('El texto no descarga archivos') },
         'node:fs/promises': {
@@ -59,6 +61,16 @@ function preparar(t, servicios = {}) {
         },
     };
     const filename = path.resolve(__dirname, '../services/orquestador.js');
+    const archivoAcciones = path.resolve(__dirname, '../services/accionesMensaje.js');
+    const moduloAcciones = new Module(archivoAcciones);
+    moduloAcciones.require = nombre => mocks[nombre];
+    moduloAcciones._compile(fs.readFileSync(archivoAcciones, 'utf8'), archivoAcciones);
+    mocks['./accionesMensaje'] = moduloAcciones.exports;
+    const archivoExternas = path.resolve(__dirname, '../services/accionesExternas.js');
+    const moduloExternas = new Module(archivoExternas);
+    moduloExternas.require = nombre => mocks[nombre] || require(nombre);
+    moduloExternas._compile(fs.readFileSync(archivoExternas, 'utf8'), archivoExternas);
+    mocks['./accionesExternas'] = moduloExternas.exports;
     const modulo = new Module(filename);
     modulo.filename = filename;
     modulo.paths = Module._nodeModulePaths(path.dirname(filename));
@@ -83,6 +95,8 @@ test('la recepción crea o reutiliza conversación, persiste texto y lo muestra 
     assert.equal(recibido.mensaje.deSistemaParaCliente, false);
     assert.deepEqual(recibido.mensaje.crudo, crudo);
     assert.equal(recibido.mensaje.usoLLM, false);
+    assert.equal(recibido.mensaje.acciones[0].accion, 'recibir');
+    assert.equal(recibido.mensaje.acciones[0].estado, 'ok');
     assert.equal(conversaciones[0].nombre, 'Cliente');
     assert.equal(conversaciones[0].ultimoMensaje.contenido, 'Hola');
     assert.deepEqual(logs.at(-1)[0], { mensaje: 'Hola', respuestaOpenAi: null });
@@ -115,6 +129,8 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
     assert.equal(String(llamadas[0][2].mensajeId), String(imagen.mensaje._id));
     assert.equal(llamadas[0][2].instrucciones, 'Describí con incertidumbre.');
     assert.equal(imagen.mensaje.transcripcionImagen, 'Una Honda Navi');
+    assert.deepEqual(imagen.mensaje.acciones.map(item => item.accion + ':' + item.estado),
+        ['recibir:ok', 'descargar_imagen:iniciada', 'descargar_imagen:ok', 'interpretar_imagen:iniciada', 'interpretar_imagen:ok']);
     assert.equal(imagen.mensaje.contenido, 'Identificá esta moto\nUna Honda Navi');
     assert.equal(imagen.mensaje.contenidoOriginal, 'Identificá esta moto');
     assert.match(imagen.mensaje.imagenArchivo, /^[a-f0-9-]+\.jpg$/);
@@ -135,6 +151,8 @@ test('imágenes y audios se descargan y enriquecen el mensaje y suman tokens de 
     assert.equal(path.basename(archivos[1].ruta), mensajes[1].audioArchivo);
     assert.equal(path.basename(path.dirname(archivos[1].ruta)), 'audio');
     assert.equal(mensajes[1].transcripcionAudio, 'Quiero comprarla');
+    assert.deepEqual(mensajes[1].acciones.map(item => item.accion + ':' + item.estado),
+        ['recibir:ok', 'descargar_audio:iniciada', 'descargar_audio:ok', 'transcribir_audio:iniciada', 'transcribir_audio:ok']);
     assert.equal(mensajes[1].contenido, 'Quiero comprarla');
     assert.equal(conversaciones[0].tokens.total, 38);
     assert.equal(conversaciones[0].tokens.entrada, 30);
@@ -199,6 +217,9 @@ test('un fallo de OpenAI conserva el mensaje, se registra en consola y no se rep
     await recibir();
     assert.equal(mensajes.length, 1);
     assert.equal(mensajes[0].estadoBot, 'omitido');
+    assert.equal(mensajes[0].acciones.at(-1).accion, 'transcribir_audio');
+    assert.equal(mensajes[0].acciones.at(-1).estado, 'error');
+    assert.equal(mensajes[0].acciones.at(-1).detalle.error, 'Cupo agotado');
     assert.match(mensajes[0].audioArchivo, /^[a-f0-9-]+\.ogg$/);
     assert.equal(mensajes[0].contenido, '[Audio]');
     assert.match(String(errores[0][1]), /Cupo agotado/);
@@ -248,7 +269,7 @@ test('una respuesta manual se integra mientras una imagen está en proceso y no 
     const analisis = new Promise(resolve => { liberarImagen = resolve; });
     let envios = 0;
     const { api, conversaciones, mensajes } = preparar(t, {
-        bot: { encolar: () => {}, cancelarEspera: async id => { assert.equal(id, String(conversaciones[0]._id)); assert.equal(conversaciones[0].botActivo, false); } },
+        bot: { encolar: () => {}, cancelarEspera: async () => assert.fail('Responder manualmente no cancela la espera.') },
         whatsapp: {
             obtenerMediaDesdeWhatsapp: async () => ({ buffer: Buffer.from('imagen'), mimeType: 'image/jpeg' }),
             enviarMensaje: async datos => { envios++; assert.equal(datos.phoneNumberId, 'numero-test'); return { messages: [{ id: 'wamid.vendedor' }] }; },
@@ -258,11 +279,13 @@ test('una respuesta manual se integra mientras una imagen está en proceso y no 
     const recepcion = api.recibirMensajeWhatsapp('5491112345678', 'Quiero esta', { id: 'imagen' }, undefined,
         { whatsappId: 'wamid.imagen', phoneNumberId: 'numero-test', receptor: '5491198765432', fechaEmitida: new Date('2026-01-01') });
     await inicio;
-    conversaciones[0].requiereAtencion = true;
+    conversaciones[0].botActivo = true;
+    conversaciones[0].accionesExternasRequeridas.push({ fecha: new Date(), detalle: 'Evaluar moto usada.', aceptada: false });
     const enviada = await api.responderMensajePorApiWhataspp(String(conversaciones[0]._id), 'Hola, soy el vendedor.');
     assert(enviada.fechaEmitida instanceof Date);
     assert.equal(enviada.respuestaAutomatica, false);
-    assert.equal(conversaciones[0].requiereAtencion, false);
+    assert.equal(conversaciones[0].accionesExternasRequeridas[0].aceptada, false);
+    assert.equal(conversaciones[0].botActivo, true);
     liberarImagen();
     await recepcion;
     assert.equal(conversaciones[0].ultimoMensaje.whatsappId, 'wamid.vendedor');
@@ -280,7 +303,7 @@ test('un envío manual sin confirmación no crea mensaje y deja la conversación
     const id = String(conversaciones[0]._id);
     await assert.rejects(api.responderMensajePorApiWhataspp(id, 'Respuesta'), /Fuera de la ventana/);
     assert.equal(conversaciones[0].ultimoMensaje.whatsappId, 'wamid.in');
-    assert.equal(conversaciones[0].requiereAtencion, true);
+    assert.equal(conversaciones[0].accionesExternasRequeridas.length, 1);
     await assert.rejects(api.responderMensajePorApiWhataspp(id, 'Respuesta'), /Tiempo agotado/);
     assert.equal(envios, 2);
     assert.equal(mensajes.length, 1);
@@ -296,5 +319,5 @@ test('el envío manual se bloquea cuando se agotó el cupo de WhatsApp', async t
     await assert.rejects(api.responderMensajePorApiWhataspp(String(conversaciones[0]._id), 'Respuesta'), /límite mensual/);
     assert.equal(llamadasWhatsapp, 0);
     assert.equal(mensajes.length, 1);
-    assert.equal(conversaciones[0].requiereAtencion, true);
+    assert.equal(conversaciones[0].accionesExternasRequeridas.length, 1);
 });

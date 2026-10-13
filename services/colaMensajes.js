@@ -1,5 +1,10 @@
 const pendientes = new Map();
 
+function segundosEspera() {
+    const segundos = Number(process.env.WAIT_BETWEEN_MESSAGES ?? 30);
+    return Number.isFinite(segundos) && segundos >= 0 && segundos <= 2147483 ? segundos : 30;
+}
+
 function programar(id, cola) {
     clearTimeout(cola.temporizador);
     cola.temporizador = setTimeout(() => procesar(id, cola), Math.max(0, cola.venceEn - Date.now()));
@@ -17,9 +22,7 @@ function agregar(mensaje, responder) {
     if (cola.mensajes.has(mensajeId)) return;
     cola.mensajes.set(mensajeId, mensaje);
     cola.version++;
-    const segundos = Number(process.env.WAIT_BETWEEN_MESSAGES ?? 30);
-    const espera = Number.isFinite(segundos) && segundos >= 0 && segundos <= 2147483 ? segundos : 30;
-    cola.venceEn = Date.now() + espera * 1000;
+    cola.venceEn = Date.now() + segundosEspera() * 1000;
     programar(id, cola);
 }
 
@@ -33,6 +36,7 @@ async function procesar(id, cola) {
     let conservar = false;
     try {
         await cola.responder(ultimo, grupo, {
+            desdeCola: true,
             vigente: () => pendientes.get(id) === cola && cola.version === version,
             cancelada: () => cola.cancelada,
         });
@@ -60,4 +64,4 @@ function cancelar(conversacionId) {
     return [...cola.mensajes.values()];
 }
 
-module.exports = { agregar, cancelar };
+module.exports = { agregar, cancelar, segundosEspera };

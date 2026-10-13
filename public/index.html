@@ -167,6 +167,11 @@
         .contexto-item p { margin: 0; max-height: 50px; overflow-y: auto; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; line-height: 1.4; }
         .contexto-atencion { border-color: #efd7a2; background: #fff8e8; }
         .contexto-atencion strong { color: #855711; }
+        #acciones-externas-pendientes { max-height: 90px; overflow-y: auto; }
+        .accion-externa-pendiente { display: flex; align-items: flex-start; gap: 8px; padding-block: 6px; }
+        .accion-externa-pendiente + .accion-externa-pendiente { border-top: 1px solid #efd7a2; }
+        .accion-externa-pendiente p { flex: 1; }
+        .accion-externa-pendiente .btn { flex-shrink: 0; font-size: 11px; }
         .mensajes {
             display: flex;
             flex: 1;
@@ -291,8 +296,8 @@
                 </div>
                 <div class="contexto-cabecera">
                     <section id="atencion-vendedor" class="contexto-item contexto-atencion" hidden>
-                        <strong>Atención del vendedor</strong>
-                        <p id="motivo-vendedor"></p>
+                        <strong>Intervenciones pendientes (<span id="contador-intervenciones">0</span>)</strong>
+                        <div id="acciones-externas-pendientes"></div>
                     </section>
                     <section class="contexto-item">
                         <strong>Resumen de la conversación</strong>
@@ -380,6 +385,6 @@
     <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/index.js?v=panel-detalle-5"></script>
+    <script src="/index.js?v=acciones-externas-7"></script>
 </body>
 </html>

@@ -16,7 +16,7 @@ test('el listado prioriza vendedores sobre fechas y la vista sin responder conse
     vm.runInContext(`actualizarControlBot = () => {}; conversaciones = [
         {_id:'reciente',nombre:'Cliente reciente',updatedAt:'2026-10-11',ultimoMensaje:{deClienteParaSistema:true}},
         {_id:'respondida',nombre:'Ya respondida',updatedAt:'2026-10-10',ultimoMensaje:{deSistemaParaCliente:true}},
-        {_id:'vendedor',nombre:'Necesita vendedor',updatedAt:'2026-01-01',requiereAtencion:true,ultimoMensaje:{deSistemaParaCliente:true}},
+        {_id:'vendedor',nombre:'Necesita vendedor',updatedAt:'2026-01-01',accionesExternasRequeridas:[{_id:'a1',detalle:'Evaluar usada',aceptada:false}],ultimoMensaje:{deSistemaParaCliente:true}},
     ]; listarConversaciones();`, context);
     const html = $('#lista-conversaciones').contenido;
     assert(html.indexOf('Necesita vendedor') < html.indexOf('Cliente reciente'));
@@ -26,6 +26,6 @@ test('el listado prioriza vendedores sobre fechas y la vista sin responder conse
     assert(pendientes.includes('Necesita vendedor'));
     assert(pendientes.includes('Cliente reciente'));
     assert(!pendientes.includes('Ya respondida'));
-    vm.runInContext(`recibirCambios({conversacion:{_id:'reciente',requiereAtencion:true,updatedAt:'2026-10-11'}});`, context);
+    vm.runInContext(`recibirCambios({conversacion:{_id:'reciente',accionesExternasRequeridas:[{_id:'a2',detalle:'Confirmar financiación',aceptada:false}],updatedAt:'2026-10-11'}});`, context);
     assert($('#lista-conversaciones').contenido.indexOf('Cliente reciente') < $('#lista-conversaciones').contenido.indexOf('Necesita vendedor'));
 });

@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const orquestador = require('./orquestador');
 const Mensaje = require('../models/mensaje');
 const Conversacion = require('../models/conversacion');
+const accionesExternas = require('./accionesExternas');
 
 const apiVersion = process.env.WHATSAPP_API_VERSION || 'v25.0';
 const graphApiBaseUrl = process.env.WHATSAPP_GRAPH_API_URL || 'https://graph.facebook.com';
@@ -79,9 +80,7 @@ async function registrarEstado(estado) {
         if (!mensaje || mensaje.fechaEntregada || mensaje.fechaLeida) return false;
         const motivo = String(estado.errors?.[0]?.message || estado.errors?.[0]?.title || 'WhatsApp informó que no pudo entregar el mensaje.').slice(0, 900);
         console.error('WhatsApp no pudo entregar el mensaje:', { whatsappId: estado.id, motivo });
-        const conversacion = await Conversacion.findOneAndUpdate({ _id: mensaje.conversacionId }, {
-            $set: { botActivo: false, requiereAtencion: true, motivoDerivacion: motivo },
-        }, { returnDocument: 'after' });
+        const conversacion = await accionesExternas.requerir(mensaje.conversacionId, motivo, mensaje._id);
         await require('./sockets').notificarCambios(conversacion, mensaje);
         return true;
     }

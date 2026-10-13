@@ -61,13 +61,14 @@ test('el login limita intentos y las rutas usan la nueva conversación', async (
         },
         './services/orquestador': {}, './services/mongo': {}, './services/metricas': {}, './services/prompts': {},
         './services/bot': { cancelarEspera: async () => {} },
+        './services/accionesExternas': {},
         './services/sockets': { inicializar() {} },
         './services/usuarios': {
             iniciarSesion: (req, res) => { loginCalls++; res.json({ sesionActiva: true }); }, cerrarSesion() {},
         },
         './models/usuarios': { exists: async () => true },
         './models/conversacion': {
-            find: filtro => { query = filtro; return { sort: valor => { orden = valor; return { limit: async () => [conversacion] }; } }; },
+            aggregate: async pipeline => { query = pipeline[0].$match; orden = pipeline.find(item => item.$sort).$sort; return [conversacion]; },
         },
         './models/mensaje': {},
         './middlewares/tieneSesion': (req, res, next) => next(),
@@ -119,7 +120,7 @@ test('el login limita intentos y las rutas usan la nueva conversación', async (
     }
     assert.equal((await request('/conversaciones/obtener')).status, 200);
     assert.equal(JSON.stringify(query), JSON.stringify({ 'ultimoMensaje.deClienteParaSistema': true, 'ultimoMensaje.fechaLeida': null }));
-    assert.deepEqual(orden, { requiereAtencion: -1, updatedAt: -1, _id: -1 });
+    assert.deepEqual(orden, { __pendiente: -1, updatedAt: -1, _id: -1 });
     assert.equal((await request('/conversaciones/obtener', 'GET', {}, '127.0.0.1', { orden: 'pendientes' })).status, 200);
-    assert.deepEqual(query, { $or: [{ requiereAtencion: true }, { 'ultimoMensaje.deClienteParaSistema': true }] });
+    assert.deepEqual(query, { $or: [{ accionesExternasRequeridas: { $elemMatch: { aceptada: { $ne: true } } } }, { 'ultimoMensaje.deClienteParaSistema': true }] });
 });

@@ -25,6 +25,12 @@ const mensajeSchema = new mongoose.Schema({
     accionEjecutada: String, //que accion llamo el LLM
     parametroEjecutado: String, //parametro que uso el LLM (ej "ando buscando una moto honda navi"-> "moto honda navi")
     parametroRecibido: String, //parametro que recibio el LLM (ej {_id: "12345", marca: "honda", modelo: "navi", estado: "nueva"})
+    acciones: [new mongoose.Schema({
+        accion: { type: String, required: true },
+        estado: { type: String, required: true, enum: ['iniciada', 'ok', 'error', 'omitida'] },
+        fecha: { type: Date, default: Date.now },
+        detalle: mixed,
+    }, { _id: false })],
     
     esAudio: Boolean,
     audioArchivo: String,
