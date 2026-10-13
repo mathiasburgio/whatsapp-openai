@@ -1,9 +1,9 @@
 function disponible() { return process.env.VEHICULOS_API_HABILITADA === 'true'; }
 async function buscar(filtro) {
     if (!disponible()) return { estado: 'sin_configurar', vehiculos: [] };
-    const url = new URL(process.env.VEHICULOS_API_URL || 'https://rpsbikes.com.ar/search');
+    const url = new URL(process.env.VEHICULOS_API_URL || 'https://rpsbikes.com.ar/buscar');
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('URL del catálogo inválida.');
-    for (const campo of ['marca', 'modelo', 'estado', 'precio_minimo', 'precio_maximo']) {
+    for (const campo of ['marca', 'modelo', 'estado', 'precioMinimo', 'precioMaximo']) {
         if (filtro[campo] !== null && filtro[campo] !== undefined) url.searchParams.set(campo, String(filtro[campo]));
     }
     const headers = { Accept: 'application/json' };
@@ -14,7 +14,7 @@ async function buscar(filtro) {
     const partes = [];
     for await (const parte of respuesta.body) {
         bytes += parte.length;
-        if (bytes > 1000000) throw new Error('El catálogo devolvió demasiada información.');
+        if (bytes > 1_000_000) throw new Error('El catálogo devolvió demasiada información.');
         partes.push(Buffer.from(parte));
     }
     const datos = JSON.parse(Buffer.concat(partes).toString('utf8'));

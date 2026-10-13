@@ -17,6 +17,7 @@ const mensajeSchema = new mongoose.Schema({
 
     usoLLM: Boolean,
     respuestaAutomatica: Boolean, //respuesta del bot aceptada por WhatsApp
+    bonificadoReferral: { type: Boolean, default: false },
     respuestaA: oid, //mensaje del cliente que originó la respuesta automática
     estadoBot: String, //pendiente, procesando, enviando, respondido, derivado, omitido, fallido o envio_incierto
     errorBot: String,
@@ -37,6 +38,7 @@ const mensajeSchema = new mongoose.Schema({
     fechaEntregada: Date, // cuando WhatsApp confirma la entrega
     fechaLeida: Date, // cuando se lee el mensaje
     
+    referral: mixed, //datos del anuncio que originó el mensaje
     crudo: mixed, //en crudo lo q llega del webhook
 
     tokens: { //tokens gastados en el mensaje

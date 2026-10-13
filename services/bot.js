@@ -122,11 +122,16 @@ async function responder(mensaje) {
             const whatsappId = crudo?.messages?.[0]?.id;
             if (typeof whatsappId !== 'string' || !whatsappId) throw new Error('WhatsApp no confirmó el ID del mensaje enviado.');
             envioAceptado = true;
+            const fechaEmitida = new Date();
+            const tiempoDesdeReferral = conversacion.referralFecha
+                ? fechaEmitida.getTime() - conversacion.referralFecha.getTime()
+                : NaN;
+            const bonificadoReferral = tiempoDesdeReferral >= 0 && tiempoDesdeReferral < 72 * 60 * 60 * 1000;
             salida = await Mensaje.create({ conversacionId: conversacion._id, whatsappId, respuestaA: mensaje._id,
                 respuestaAutomatica: true, deSistemaParaCliente: true, deClienteParaSistema: false,
                 emisor: mensaje.receptor, receptor: conversacion.telefono, contenido: respuesta.mensaje.trim(),
                 mediaPhoneNumberId: mensaje.mediaPhoneNumberId,
-                usoLLM: true, fechaEmitida: new Date(), crudo });
+                usoLLM: true, fechaEmitida, bonificadoReferral, crudo });
             mensaje.estadoBot = decision.accion === 'notify_seller' ? 'derivado' : 'respondido';
             await Conversacion.updateOne({ _id: conversacion._id }, {
                 $set: { deClienteParaSistema: false, ultimoMensaje: salida.toObject() }, $inc: { turnosDesdeResumen: 1 },

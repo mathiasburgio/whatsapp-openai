@@ -8,6 +8,7 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
     resumen: String, //resumen de la conversacion q va generando el bot
     turnosDesdeResumen: { type: Number, default: 0 },
     origenPromocion: { type: String, default: '' }, //texto asociado a una posible promoción
+    referralFecha: Date, //último ingreso desde un anuncio de Meta
     requiereAtencion: { type: Boolean, default: false },
     motivoDerivacion: String,
     botActivo: { type: Boolean, default: false }, //si debe auto-contestar el LLM

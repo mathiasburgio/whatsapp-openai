@@ -72,6 +72,7 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
     if (!conversacion) conversacion = await Conversacion.create({ telefono, nombre: datos.nombre || telefono, deClienteParaSistema: true });
     else if (datos.nombre) conversacion.nombre = datos.nombre;
     const fechaEmitida = datos.fechaEmitida instanceof Date && Number.isFinite(datos.fechaEmitida.getTime()) ? datos.fechaEmitida : new Date();
+    const referral = datos.crudo?.referral?.source_type === 'ad' ? datos.crudo.referral : undefined;
     let mensaje = existente;
     if (!mensaje) {
         try {
@@ -81,12 +82,13 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
                 contenido: contenido || (imagen ? '[Imagen]' : audio ? '[Audio]' : ''), deClienteParaSistema: true, deSistemaParaCliente: false,
                 esImagen: !!imagen, esAudio: !!audio, usoLLM: false,
                 estadoBot: conversacion.botActivo ? 'pendiente' : 'omitido',
-                fechaEmitida, crudo: datos.crudo });
+                fechaEmitida, referral, crudo: datos.crudo });
         } catch (error) {
             if (error.code === 11000 && datos.whatsappId) return { mensaje: await Mensaje.findOne({ whatsappId: datos.whatsappId }), duplicado: true };
             throw error;
         }
     }
+    if (mensaje.referral)  await Conversacion.updateOne({ _id: conversacion._id }, { $max: { referralFecha: fechaEmitida } });
     try { await promociones.registrar(conversacion, mensaje); }
     catch (error) { console.error('No se pudo registrar el origen de la conversación:', error.message); }
     await actualizarConversacion(conversacion, mensaje);
