@@ -9,4 +9,4 @@ Si «esa moto» no identifica un vehículo concreto, elegí responder para pedir
 
 Devolvé un objeto JSON con todos los campos:
 {"accion":"responder","filtro":{"marca":null,"modelo":null,"estado":null,"precio_minimo":null,"precio_maximo":null},"motivo":"Descripción breve de la acción elegida"}
-accion solo admite responder, buscar_vehiculo o notify_seller. filtro siempre contiene todos esos campos: marca/modelo son strings o null; estado es nuevo, usado o null; los precios son números no negativos o null. El origen de una promoción puede ayudar a interpretar el interés inicial, pero no confirma precios ni stock. El motivo es para el sistema y el vendedor, no debe contener razonamientos internos extensos.
+accion solo admite responder, buscar_vehiculo o notify_seller. filtro siempre contiene todos esos campos: marca/modelo son strings o null; estado es nuevo, usado o null; los precios son números no negativos o null. El motivo es para el sistema y el vendedor, no debe contener razonamientos internos extensos.

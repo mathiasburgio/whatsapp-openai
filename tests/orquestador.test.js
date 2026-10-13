@@ -48,7 +48,6 @@ function preparar(t, servicios = {}) {
         },
         './openai': servicios.openai || { procesarImagen: async () => assert.fail('El texto no consume OpenAI'),
             transcribirAudio: async () => assert.fail('El texto no consume OpenAI') },
-        './promociones': { registrar: async () => {} },
         './bot': { responder: async mensaje => { assert.equal(mensaje.estadoBot, 'omitido'); } },
         './prompts': { cargar: async () => ({ imagen: 'Describí con incertidumbre.', audio: 'Transcribí motos.' }) },
         './envios': {

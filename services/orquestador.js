@@ -6,7 +6,6 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const prompts = require('./prompts');
-const promociones = require('./promociones');
 const bot = require('./bot');
 const envios = require('./envios');
 const mongoose = require('mongoose');
@@ -89,8 +88,6 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
         }
     }
     if (mensaje.referral)  await Conversacion.updateOne({ _id: conversacion._id }, { $max: { referralFecha: fechaEmitida } });
-    try { await promociones.registrar(conversacion, mensaje); }
-    catch (error) { console.error('No se pudo registrar el origen de la conversación:', error.message); }
     await actualizarConversacion(conversacion, mensaje);
     let respuestaOpenAi = null;
     let falloProcesamiento = false;

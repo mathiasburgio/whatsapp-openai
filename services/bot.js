@@ -22,7 +22,6 @@ async function contexto(conversacion, mensaje) {
     ] }).sort({ createdAt: -1, _id: -1 }).limit(12);
     const datos = {
         resumenAnterior: (conversacion.resumen || '').slice(0, 4000),
-        origenPromocion: conversacion.origenPromocion || '',
         buscarVehiculoDisponible: vehiculos.disponible(),
         mensajeActualId: String(mensaje._id),
         mensajes: recientes.reverse().map(item => ({ id: String(item._id),

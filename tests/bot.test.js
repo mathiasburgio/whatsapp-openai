@@ -78,7 +78,6 @@ function preparar(t, opciones = {}) {
 }
 test('el bot activo selecciona, responde y registra un único envío con consumo', async t => {
     const { api, entrada, llamadas, envios, mensajes, conversacion, cambios } = preparar(t);
-    conversacion.origenPromocion = 'Venta corven';
     await Promise.all([api.responder(entrada), api.responder(entrada)]);
     assert.equal(llamadas.length, 2);
     assert.equal(envios.length, 1);
@@ -94,7 +93,6 @@ test('el bot activo selecciona, responde y registra un único envío con consumo
     assert.match(llamadas[1].config.instrucciones, /Responder/);
     assert(llamadas.every(llamada => String(llamada.config.mensajeId) === String(entrada._id)));
     assert.equal(llamadas[0].datos.resumenAnterior, 'Cliente busca una Corven.');
-    assert.equal(llamadas[0].datos.origenPromocion, 'Venta corven');
     assert.equal(cambios.some(item => item.mensaje.respuestaAutomatica), true);
     await api.responder(entrada);
     assert.equal(envios.length, 1);

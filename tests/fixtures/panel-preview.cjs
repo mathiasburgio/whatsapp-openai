@@ -6,7 +6,6 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { Module, createRequire } = require('node:module');
-const { detectar } = require('../../services/promociones');
 async function iniciar() {
     const root = path.resolve(__dirname, '../..');
     const temporal = await fs.mkdtemp(path.join(os.tmpdir(), 'whatsapp-panel-preview-'));
@@ -22,7 +21,7 @@ async function iniciar() {
         fechaEmitida: new Date().toISOString() };
     const conversacion = { _id: entrada.conversacionId, nombre: 'Cliente de prueba', telefono: '5491100000000', botActivo: false,
         requiereAtencion: true, motivoDerivacion: 'Necesita confirmar precio con el vendedor.', updatedAt: '2026-01-01T00:00:00Z',
-        origenPromocion: detectar(entrada, prompts.validarPromociones((await prompts.leer('promociones')).contenido)), ultimoMensaje: entrada };
+        ultimoMensaje: entrada };
     const pendientes = { _id: '507f1f77bcf86cd799439021', nombre: 'Consulta reciente', telefono: '5491100000001', updatedAt: new Date().toISOString(),
         botActivo: false, ultimoMensaje: { deClienteParaSistema: true, contenido: 'Hola' } };
     const respondida = { _id: '507f1f77bcf86cd799439031', nombre: 'Consulta respondida', telefono: '5491100000002', updatedAt: new Date().toISOString(),

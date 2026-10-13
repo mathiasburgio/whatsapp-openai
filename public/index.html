@@ -107,10 +107,6 @@
         #modal-prompts { width: min(940px, calc(100% - 24px)); }
         #modal-descartar-prompts { width: min(460px, calc(100% - 24px)); }
         #prompt-contenido { min-height: 300px; height: 40dvh; resize: vertical; font-size: 14px; line-height: 1.55; }
-        .regla-promocion { margin-top: 16px; padding: 16px; border: 1px solid var(--borde); border-radius: 8px; background: var(--superficie); }
-        .regla-promocion label { display: block; margin-top: 8px; font-size: 13px; }
-        .origen-promocion { color: #245898; background: #e8f1ff; }
-        #origen-conversacion { display: block; margin-top: 6px; font-size: 12px; color: #245898; }
 
         .buscador { padding: 16px; border-bottom: 1px solid var(--borde); }
         .buscador .input-group { min-height: 40px; }
@@ -240,7 +236,7 @@
     <main id="vista-conversaciones" class="vista-conversaciones" aria-label="Conversaciones">
         <header class="barra-panel">
             <h1 class="titulo-panel">WhatsApp</h1>
-            <button id="btn-prompts" type="button" class="btn btn-outline-secondary">Prompts y promociones</button>
+            <button id="btn-prompts" type="button" class="btn btn-outline-secondary">Prompts</button>
             <button id="btn-metricas" type="button" class="btn btn-outline-secondary"><i class="fa-solid fa-chart-simple me-1" aria-hidden="true"></i> Métricas del mes</button>
             <button id="btn-cerrar-sesion" type="button" class="btn btn-outline-secondary"><i class="fa-solid fa-right-from-bracket me-1" aria-hidden="true"></i> Cerrar sesión</button>
         </header>
@@ -264,7 +260,6 @@
             <header class="cabecera-conversacion">
                 <span id="nombre-conversacion" class="nombre-contacto">Seleccioná una conversación</span>
                 <span id="telefono-conversacion" class="telefono-contacto"></span>
-                <span id="origen-conversacion" hidden></span>
                 <div class="control-bot">
                     <div class="form-check form-switch">
                         <input id="bot-activo" class="form-check-input" type="checkbox" role="switch" disabled>
@@ -309,7 +304,7 @@
 
     <dialog class="metricas-modal" id="modal-prompts" aria-labelledby="titulo-prompts">
         <div class="modal-header">
-            <h2 class="modal-title fs-5" id="titulo-prompts">Prompts y promociones</h2>
+            <h2 class="modal-title fs-5" id="titulo-prompts">Prompts</h2>
             <button type="button" class="btn-close" data-cerrar-prompts aria-label="Cerrar editor"></button>
         </div>
         <div class="modal-body">
@@ -318,11 +313,6 @@
             <p id="prompt-descripcion" class="small text-secondary"></p>
             <label for="prompt-contenido" id="prompt-etiqueta" class="form-label">Contenido del prompt</label>
             <textarea id="prompt-contenido" class="form-control" spellcheck="false" maxlength="16000" disabled></textarea>
-            <div id="editor-promociones" hidden>
-                <p class="small">Se busca una de estas frases en el primer mensaje, sin distinguir mayúsculas ni tildes. Si coincide, se guarda el texto del mensaje como posible origen de promoción; la coincidencia no confirma que provenga de una campaña.</p>
-                <div id="reglas-promociones"></div>
-                <button id="btn-agregar-promocion" type="button" class="btn btn-outline-secondary mt-3">Agregar promoción</button>
-            </div>
             <p id="prompt-estado" class="small mt-3 mb-0" role="status" aria-live="polite"></p>
             <p class="small text-secondary mt-2 mb-0">Los cambios guardados se usan en los próximos mensajes. Completá los datos del comercio antes de activar el bot.</p>
         </div>

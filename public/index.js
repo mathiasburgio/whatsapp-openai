@@ -175,8 +175,6 @@ function actualizarControlBot() {
     $('#bot-detalle').text(conversacionActual?.requiereAtencion
         ? 'Atención del vendedor: ' + (conversacionActual.motivoDerivacion || 'Consulta derivada.')
         : conversacionActual?.botActivo ? 'Respuestas automáticas habilitadas para los próximos mensajes.' : 'Al activarlo, el bot responderá a los próximos mensajes.');
-    const origen = conversacionActual?.origenPromocion;
-    $('#origen-conversacion').prop('hidden', !origen).text(origen ? 'Texto asociado a promoción: ' + origen : '');
 }
 
 async function cambiarEstadoBot() {
@@ -274,7 +272,6 @@ function listarConversaciones(){
                 </span>
                 <span class="tags-conversacion">
                     ${conversacion.requiereAtencion ? '<span class="badge tag lead-warm">Requiere vendedor</span>' : ''}
-                    ${conversacion.origenPromocion ? `<span class="badge tag origen-promocion" title="Texto asociado a promoción">${escaparHtml(conversacion.origenPromocion)}</span>` : ''}
                     <span class="badge tag lead-${lead}">${lead}</span>
                     <span class="badge tag bot-${conversacion.botActivo ? 'activo' : 'inactivo'}">
                         <i class="fa-solid fa-circle" aria-hidden="true"></i>
@@ -428,41 +425,19 @@ async function enviarMensaje(){
 }
 
 function contenidoEditor() {
-    if (promptActual?.id !== 'promociones') return $('#prompt-contenido').val();
-    const promociones = Array.from(document.querySelectorAll('.regla-promocion')).map(fila => ({
-        id: fila.dataset.id,
-        nombre: fila.querySelector('[data-campo="nombre"]').value.trim(),
-        palabrasClave: fila.querySelector('[data-campo="palabrasClave"]').value.split('\n').map(frase => frase.trim()).filter(Boolean),
-    }));
-    return JSON.stringify({ promociones }, null, 2) + '\n';
+    return $('#prompt-contenido').val();
 }
 function hayCambiosPrompt() { return !!promptActual && contenidoEditor() !== contenidoInicialPrompt; }
 function actualizarEstadoEditor() {
     $('#btn-guardar-prompt').prop('disabled', guardandoPrompt || !hayCambiosPrompt());
     $('#prompt-estado').text(hayCambiosPrompt() ? 'Cambios sin guardar.' : '');
 }
-function agregarReglaPromocion(regla = {}) {
-    const id = regla.id || 'promo-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
-    $('#reglas-promociones').append(`<section class="regla-promocion" data-id="${escaparHtml(id)}">
-        <label>Nombre de la promoción<input class="form-control" data-campo="nombre" maxlength="160" value="${escaparHtml(regla.nombre || '')}" placeholder="Ej. CORVEN XXX – Facebook"></label>
-        <label>Frases para detectar (una por línea)<textarea class="form-control" data-campo="palabrasClave" rows="2" aria-label="Frases para detectar (una por línea)" placeholder="Más info de CORVEN XXX">${escaparHtml((regla.palabrasClave || []).join('\n'))}</textarea></label>
-        <button type="button" class="btn btn-outline-danger btn-sm mt-3" data-eliminar-promocion>Eliminar promoción</button>
-    </section>`);
-}
 function seleccionarPrompt(id) {
     promptActual = promptsDisponibles.find(item => item.id === id) || null;
     if (!promptActual) return;
     $('#prompt-selector').val(id);
     $('#prompt-descripcion').text(promptActual.descripcion);
-    const esPromociones = id === 'promociones';
-    $('#prompt-contenido, #prompt-etiqueta').prop('hidden', esPromociones);
-    $('#editor-promociones').prop('hidden', !esPromociones);
     $('#prompt-contenido').val(promptActual.contenido).prop('disabled', false);
-    $('#reglas-promociones').empty();
-    if (esPromociones) {
-        try { JSON.parse(promptActual.contenido).promociones.forEach(agregarReglaPromocion); }
-        catch { $('#prompt-estado').text('La configuración de promociones no es válida. Revisá PROMOCIONES.json en el servidor.'); promptActual = null; return; }
-    }
     contenidoInicialPrompt = contenidoEditor();
     actualizarEstadoEditor();
 }
@@ -516,7 +491,7 @@ function limpiarPrompts() {
     const modal = document.getElementById('modal-prompts');
     if (modal?.open) modal.close();
     $('#prompt-contenido').val('');
-    $('#reglas-promociones, #prompt-selector').empty();
+    $('#prompt-selector').empty();
     $('#btn-guardar-prompt').prop('disabled', true);
 }
 async function guardarPrompt() {
@@ -553,12 +528,7 @@ $('[data-cerrar-prompts]').on('click', cerrarPrompts);
 $('#modal-prompts').on('cancel', ev => { ev.preventDefault(); cerrarPrompts(); });
 $('#btn-guardar-prompt').on('click', guardarPrompt);
 $('#btn-recargar-prompts').on('click', cargarPrompts);
-$('#prompt-contenido, #reglas-promociones').on('input', actualizarEstadoEditor);
-$('#btn-agregar-promocion').on('click', () => { if (!guardandoPrompt) { agregarReglaPromocion(); actualizarEstadoEditor(); } });
-$('#reglas-promociones').on('click', '[data-eliminar-promocion]', ev => {
-    if (guardandoPrompt) return;
-    $(ev.currentTarget).closest('.regla-promocion').remove(); actualizarEstadoEditor();
-});
+$('#prompt-contenido').on('input', actualizarEstadoEditor);
 $('#prompt-selector').on('change', async () => {
     const id = $('#prompt-selector').val();
     if (await confirmarDescartar()) seleccionarPrompt(id);
