@@ -158,7 +158,7 @@ async function enviarMensaje({ to, text, phoneNumberId = defaultPhoneNumberId, r
         to,
         type: 'text',
         text: {
-            preview_url: false,
+            preview_url: true,
             body: text,
         },
     };

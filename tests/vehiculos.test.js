@@ -6,13 +6,20 @@ test('catálogo desactivado no consulta; activado envía filtros y proyecta solo
     t.after(() => entorno.forEach(([nombre, valor]) => { if (valor === undefined) delete process.env[nombre]; else process.env[nombre] = valor; }));
     let consultas = 0;
     const vehiculoId = '507f1f77bcf86cd799439011';
+    const ficha = {
+        anio: 2026, version: '400', kilometraje: 0, cilindrada: 373, combustible: 'Nafta',
+        transmision: 'Manual', marchas: 6, potenciaHp: 40, torqueNm: 35, cilindros: 1,
+        regrigeracion: 'Líquida', refrigeracion: 'Líquida', pesoKg: 184.5, capacidadTanqueL: 13,
+        origen: 'India', visible: true, prioridad: 3, descripcion: 'ABS de doble canal e iluminación full LED.',
+        financiacion: 'Consultar planes vigentes.', fotos: [{ url: 'https://rpsbikes.com.ar/moto.jpg', portada: true }],
+    };
     let esperados = { marca: 'Corven', modelo: 'XXX', precioMinimo: '0', precioMaximo: '100' };
     t.mock.method(global, 'fetch', async (url, opciones) => {
         consultas++;
         assert.equal(url.origin + url.pathname, 'https://rpsbikes.com.ar/buscar');
         assert.deepEqual(Object.fromEntries(url.searchParams), esperados);
         assert.equal(opciones.headers.Authorization, 'Bearer prueba');
-        return new Response(JSON.stringify({ vehiculos: [{ vehiculoId, marca: 'Corven', modelo: 'XXX', vehiculo: 'moto', tipo: 'urbana', estado: 'usado', detalle: 'Muy buen estado', observacionesInternas: 'Confirmar entrega después de revisión de taller.', color: 'Rojo', disponible: true, enlace: 'https://rpsbikes.com.ar/moto/corven', precio: 100, moneda: 'ARS', credencial: 'secreto' }] }));
+        return new Response(JSON.stringify({ vehiculos: [{ ...ficha, vehiculoId, marca: 'Corven', modelo: 'XXX', vehiculo: 'moto', tipo: 'urbana', estado: 'usado', detalle: 'Muy buen estado', observacionesInternas: 'Confirmar entrega después de revisión de taller.', color: 'Rojo', disponible: true, enlace: 'https://rpsbikes.com.ar/moto/corven', precio: 100, moneda: 'ARS', credencial: 'secreto', patente: 'ABC123', nroMotor: 'motor-privado', nroChasis: 'chasis-privado' }] }));
     });
     process.env.VEHICULOS_API_HABILITADA = 'false';
     const filtro = { marca: 'Corven', modelo: 'XXX', precioMinimo: 0, precioMaximo: 100,
@@ -24,6 +31,8 @@ test('catálogo desactivado no consulta; activado envía filtros y proyecta solo
     process.env.VEHICULOS_API_TOKEN = 'prueba';
     const resultado = await vehiculos.buscar(filtro);
     assert.equal(resultado.estado, 'ok');
+    for (const [campo, valor] of Object.entries(ficha)) assert.deepEqual(resultado.vehiculos[0][campo], valor, campo);
+    for (const campo of ['patente', 'nroMotor', 'nroChasis']) assert.equal(Object.hasOwn(resultado.vehiculos[0], campo), false, campo);
     assert.equal(resultado.vehiculos[0].credencial, undefined);
     assert.equal(resultado.vehiculos[0].precio, 100);
     assert.equal(resultado.vehiculos[0].vehiculoId, vehiculoId);
