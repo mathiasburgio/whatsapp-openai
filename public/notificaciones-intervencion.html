@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Intervención del vendedor</title>
+    <link rel="stylesheet" href="/notificaciones.css">
+</head>
+<body>
+    <h1>Intervención del vendedor</h1>
+    <p id="estado" role="status" aria-live="polite">Cargando conversación…</p>
+    <main id="intervencion" hidden>
+        <section>
+            <h2 id="contacto"></h2>
+            <p id="telefono" class="nota"></p>
+            <a id="enviar" class="boton" target="_blank" rel="noopener noreferrer">Enviar mensaje</a>
+            <p class="nota">Se abre tu WhatsApp o WhatsApp Web. El mensaje se envía desde tu cuenta personal.</p>
+        </section>
+        <section>
+            <h2>Resumen</h2>
+            <p id="resumen"></p>
+        </section>
+        <section>
+            <h2>Items que requieren intervención</h2>
+            <p class="nota">El borde resaltado indica el motivo de esta notificación.</p>
+            <ul id="pendientes"></ul>
+        </section>
+        <h2>Últimos 20 mensajes</h2>
+        <div id="mensajes"></div>
+    </main>
+    <script src="/notificaciones-intervencion.js"></script>
+</body>
+</html>

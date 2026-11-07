@@ -5,6 +5,8 @@ const mixed = mongoose.Schema.Types.Mixed;
 const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, //ordena en un boolean el sentido de la coversacion
     nombre: String, //nombre del cliente
     telefono: String, //telefono del cliente
+    canal: { type: String, enum: ['whatsapp', 'simulador'], default: 'whatsapp' },
+    versionSimulador: { type: Number, default: 0, min: 0 }, //cambia al comenzar una prueba nueva
     resumen: String, //resumen de la conversacion q va generando el bot
     turnosDesdeResumen: { type: Number, default: 0 },
     referralFecha: Date, //último ingreso desde un anuncio de Meta
@@ -17,7 +19,7 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
         detalle: { type: String, required: true },
         aceptada: { type: Boolean, default: false },
     }],
-    botActivo: { type: Boolean, default: false }, //si debe auto-contestar el LLM
+    botActivo: { type: Boolean, default: true }, //las conversaciones nuevas se atienden desde el primer mensaje
     ultimoMensaje: mixed, //copia del schema de "mensaje"
 
 

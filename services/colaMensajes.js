@@ -1,13 +1,28 @@
 const pendientes = new Map();
+const procesamientosActivos = new Map();
 
-function segundosEspera() {
+function segundosEspera(mensaje) {
+    if (mensaje?.esSimulacion && [1, 5, 10, 15, 20].includes(mensaje.segundosEsperaSimulada)) {
+        return mensaje.segundosEsperaSimulada;
+    }
     const segundos = Number(process.env.WAIT_BETWEEN_MESSAGES ?? 30);
     return Number.isFinite(segundos) && segundos >= 0 && segundos <= 2147483 ? segundos : 30;
 }
 
 function programar(id, cola) {
     clearTimeout(cola.temporizador);
-    cola.temporizador = setTimeout(() => procesar(id, cola), Math.max(0, cola.venceEn - Date.now()));
+    cola.temporizador = setTimeout(function iniciarProcesamientoProgramado() {
+        if (cola.procesando || pendientes.get(id) !== cola) return;
+        const proceso = procesar(id, cola);
+        const activos = procesamientosActivos.get(id) || new Set();
+        activos.add(proceso);
+        procesamientosActivos.set(id, activos);
+        function quitarProcesamientoTerminado() {
+            activos.delete(proceso);
+            if (!activos.size) procesamientosActivos.delete(id);
+        }
+        proceso.then(quitarProcesamientoTerminado, quitarProcesamientoTerminado);
+    }, Math.max(0, cola.venceEn - Date.now()));
 }
 
 function agregar(mensaje, responder) {
@@ -22,7 +37,7 @@ function agregar(mensaje, responder) {
     if (cola.mensajes.has(mensajeId)) return;
     cola.mensajes.set(mensajeId, mensaje);
     cola.version++;
-    cola.venceEn = Date.now() + segundosEspera() * 1000;
+    cola.venceEn = Date.now() + segundosEspera(mensaje) * 1000;
     programar(id, cola);
 }
 
@@ -64,4 +79,11 @@ function cancelar(conversacionId) {
     return [...cola.mensajes.values()];
 }
 
-module.exports = { agregar, cancelar, segundosEspera };
+// Espera también a procesos cuya cola ya se canceló al pausar el bot.
+async function cancelarYEsperarProcesamiento(conversacionId) {
+    const mensajes = cancelar(conversacionId);
+    await Promise.all([...(procesamientosActivos.get(String(conversacionId)) || [])]);
+    return mensajes;
+}
+
+module.exports = { agregar, cancelar, segundosEspera, cancelarYEsperarProcesamiento };

@@ -10,9 +10,6 @@
     "probar_decisions": "node scripts/probar_openai.js decisions",
     "habilitar_usuario": "node scripts/habilitar_usuario.js",
     "deshabilitar_usuario": "node scripts/deshabilitar_usuario.js",
-    "migrar_acciones_externas": "node scripts/migrar_acciones_externas.js",
-    "test": "node --test tests/*.test.js",
-    "test:integration": "node --test tests/integration/*.test.js",
     "iniciar": "node ."
   },
   "dependencies": {
@@ -28,6 +25,7 @@
     "music-metadata": "^12.1.0",
     "node-cron": "^4.6.0",
     "sharp": "^0.35.5",
-    "socket.io": "^4.8.4"
+    "socket.io": "^4.8.4",
+    "web-push": "^4.0.0"
   }
 }

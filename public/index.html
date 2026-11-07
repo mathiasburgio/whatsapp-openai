@@ -208,6 +208,14 @@
         .compositor { display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-top: 1px solid var(--borde); background: var(--superficie); }
         .compositor textarea { height: 46px; min-height: 46px; resize: none; padding: 11px 14px; border: 0; border-radius: 8px; font-size: 14px; }
         .compositor .btn { flex-shrink: 0; padding-inline: 20px; }
+        .controles-simulador { flex-shrink: 0; padding: 10px 16px; border-top: 1px solid #d7c794; background: #fff8e8; }
+        .herramientas-simulador { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+        .herramientas-simulador .form-select { width: auto; }
+        .nota-simulador { margin: 6px 0 0; font-size: 12px; color: #78591c; }
+        .adjunto-simulador { margin-top: 8px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+        .adjunto-simulador[hidden] { display: none; }
+        .adjunto-simulador img { max-width: 120px; max-height: 90px; object-fit: contain; }
+        .adjunto-simulador audio { width: min(320px, 100%); }
         .lista-conversaciones, .mensajes { scrollbar-width: thin; scrollbar-color: #c5cece transparent; }
 
         @media (max-width: 900px) {
@@ -260,7 +268,9 @@
     <main id="vista-conversaciones" class="vista-conversaciones" aria-label="Conversaciones">
         <header class="barra-panel">
             <h1 class="titulo-panel">WhatsApp</h1>
+            <button id="btn-simulador" type="button" class="btn btn-outline-secondary">Test · Simulador</button>
             <button id="btn-prompts" type="button" class="btn btn-outline-secondary">Prompts</button>
+            <button id="btn-notificaciones" type="button" class="btn btn-outline-secondary">Invitar a notificaciones</button>
             <button id="btn-metricas" type="button" class="btn btn-outline-secondary"><i class="fa-solid fa-chart-simple me-1" aria-hidden="true"></i> Métricas del mes</button>
             <button id="btn-cerrar-sesion" type="button" class="btn btn-outline-secondary"><i class="fa-solid fa-right-from-bracket me-1" aria-hidden="true"></i> Cerrar sesión</button>
         </header>
@@ -307,6 +317,30 @@
             </header>
 
             <div id="mensajes" class="mensajes" role="log" aria-label="Mensajes"></div>
+
+            <section id="controles-simulador" class="controles-simulador" aria-label="Simulador de cliente" hidden>
+                <div class="herramientas-simulador">
+                    <label for="espera-simulador" class="small">Espera antes de responder</label>
+                    <select id="espera-simulador" class="form-select form-select-sm">
+                        <option value="1">1 segundo</option>
+                        <option value="5" selected>5 segundos</option>
+                        <option value="10">10 segundos</option>
+                        <option value="15">15 segundos</option>
+                        <option value="20">20 segundos</option>
+                    </select>
+                    <input id="imagen-simulador" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+                    <button id="btn-imagen-simulador" type="button" class="btn btn-sm btn-outline-secondary">Subir imagen</button>
+                    <button id="btn-grabar-simulador" type="button" class="btn btn-sm btn-outline-danger">Grabar audio</button>
+                    <button id="btn-limpiar-simulador" type="button" class="btn btn-sm btn-outline-danger">Limpiar y empezar de cero</button>
+                </div>
+                <p class="nota-simulador">Enviás como cliente Test. La respuesta aparece en este chat. Cada mensaje reinicia la espera; luego se suma el procesamiento de IA. Usa IA real y consume su cupo.</p>
+                <p id="estado-simulador" class="nota-simulador" role="status" aria-live="polite"></p>
+                <div id="adjunto-simulador" class="adjunto-simulador" hidden>
+                    <img id="preview-imagen-simulador" alt="Imagen por enviar" hidden>
+                    <audio id="preview-audio-simulador" controls preload="metadata" aria-label="Escuchar grabación antes de enviar" hidden></audio>
+                    <button id="btn-quitar-adjunto-simulador" type="button" class="btn btn-sm btn-outline-secondary">Quitar adjunto</button>
+                </div>
+            </section>
 
             <div class="compositor">
                 <label for="texto-mensaje" class="visually-hidden">Escribir un mensaje</label>
@@ -371,6 +405,9 @@
             <p class="small text-secondary mt-2 mb-0">Los cambios guardados se usan en los próximos mensajes. Completá los datos del comercio antes de activar el bot.</p>
         </div>
         <div class="modal-footer">
+            <button id="btn-descargar-prompts" type="button" class="btn btn-outline-secondary">Descargar todos</button>
+            <button id="btn-cargar-prompts" type="button" class="btn btn-outline-secondary" disabled>Cargar archivo</button>
+            <input id="archivo-prompts" type="file" accept=".json,application/json" hidden>
             <button id="btn-recargar-prompts" type="button" class="btn btn-outline-secondary">Volver a cargar</button>
             <button type="button" class="btn btn-outline-secondary" data-cerrar-prompts>Cerrar</button>
             <button id="btn-guardar-prompt" type="button" class="btn btn-enviar" disabled>Guardar cambios</button>
@@ -389,6 +426,7 @@
     <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/index.js?v=metricas-whatsapp-8"></script>
+    <script src="/simulador.js?v=simulador-2"></script>
+    <script src="/index.js?v=notificaciones-prompts-1"></script>
 </body>
 </html>

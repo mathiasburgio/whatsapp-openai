@@ -26,9 +26,13 @@ const formatosMedia = {
 
 async function descargarMedia(descriptor, tipo, mensaje, phoneNumberId) {
     const configuracion = formatosMedia[tipo];
-    if (!configuracion || !descriptor?.id) throw new Error('El mensaje no tiene un archivo válido.');
-    const archivo = await require('./whatsapp').obtenerMediaDesdeWhatsapp(descriptor.id,
-        { phoneNumberId, maxBytes: configuracion.limite });
+    if (!configuracion || (!descriptor?.id && !mensaje.esSimulacion)) throw new Error('El mensaje no tiene un archivo válido.');
+    const archivo = mensaje.esSimulacion ? descriptor
+        : await require('./whatsapp').obtenerMediaDesdeWhatsapp(descriptor.id,
+            { phoneNumberId, maxBytes: configuracion.limite });
+    if (!Buffer.isBuffer(archivo?.buffer) || !archivo.buffer.length || archivo.buffer.length > configuracion.limite) {
+        throw new Error('El archivo está vacío o supera el tamaño permitido.');
+    }
     const mimeType = archivo.mimeType.split(';')[0].trim().toLowerCase();
     const extension = configuracion.extensiones[mimeType];
     if (!extension) throw new Error('El archivo de WhatsApp tiene un formato no compatible.');
@@ -44,9 +48,21 @@ async function descargarMedia(descriptor, tipo, mensaje, phoneNumberId) {
 function recibirMensajeWhatsapp(telefono, mensaje = '', imagen, audio, datos = {}) {
     if (typeof telefono !== 'string' || !/^\d{5,20}$/.test(telefono)) return Promise.reject(new Error('El teléfono de WhatsApp no es válido.'));
     if (typeof mensaje !== 'string') return Promise.reject(new Error('El mensaje debe ser texto.'));
+    return encadenarRecepcionMensaje(telefono, mensaje, imagen, audio, datos);
+}
+
+// El simulador entra por la misma recepción, con un ID de conversación interno y archivos locales.
+function recibirMensajeSimulado(conversacionId, contenido, archivo, segundosEspera) {
+    return encadenarRecepcionMensaje('test', contenido,
+        archivo?.tipo === 'imagen' ? archivo : undefined,
+        archivo?.tipo === 'audio' ? archivo : undefined,
+        { conversacionSimuladaId: conversacionId, segundosEspera, receptor: 'panel', nombre: 'Test' });
+}
+
+function encadenarRecepcionMensaje(telefono, mensaje, imagen, audio, datos) {
     // Evita crear dos conversaciones y alterar el orden al recibir varios mensajes del mismo teléfono.
     const anterior = pendientesPorTelefono.get(telefono) || Promise.resolve();
-    const actual = anterior.catch(() => {}).then(() => procesarMensajeWhatsapp(telefono, mensaje, imagen, audio, datos));
+    const actual = anterior.catch(() => {}).then(() => procesarMensajeEntrante(telefono, mensaje, imagen, audio, datos));
     pendientesPorTelefono.set(telefono, actual);
     const limpiar = () => { if (pendientesPorTelefono.get(telefono) === actual) pendientesPorTelefono.delete(telefono); };
     actual.then(limpiar, limpiar);
@@ -65,11 +81,13 @@ async function actualizarConversacion(conversacion, mensaje, tokens) {
     await sockets.notificarCambios(actualizada || conversacion, mensaje);
 }
 
-async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos) {
+async function procesarMensajeEntrante(telefono, contenido, imagen, audio, datos) {
     const existente = datos.whatsappId ? await Mensaje.findOne({ whatsappId: datos.whatsappId }) : null;
     if (existente) return { mensaje: existente, duplicado: true };
-    let conversacion = existente ? await Conversacion.findById(existente.conversacionId)
-        : await Conversacion.findOne({ telefono }).sort({ updatedAt: -1 });
+    let conversacion = datos.conversacionSimuladaId
+        ? await Conversacion.findOne({ _id: datos.conversacionSimuladaId, canal: 'simulador' })
+        : await Conversacion.findOne({ telefono, canal: { $ne: 'simulador' } }).sort({ updatedAt: -1 });
+    if (datos.conversacionSimuladaId && !conversacion) throw new Error('Conversación de Test no encontrada.');
     if (!conversacion) conversacion = await Conversacion.create({ telefono, nombre: datos.nombre || telefono, deClienteParaSistema: true });
     else if (datos.nombre) conversacion.nombre = datos.nombre;
     const fechaEmitida = datos.fechaEmitida instanceof Date && Number.isFinite(datos.fechaEmitida.getTime()) ? datos.fechaEmitida : new Date();
@@ -78,6 +96,9 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
     if (!mensaje) {
         try {
             mensaje = await Mensaje.create({ conversacionId: conversacion._id, whatsappId: datos.whatsappId,
+                esSimulacion: conversacion.canal === 'simulador',
+                versionSimulador: conversacion.canal === 'simulador' ? conversacion.versionSimulador : undefined,
+                segundosEsperaSimulada: datos.conversacionSimuladaId ? datos.segundosEspera : undefined,
                 emisor: telefono, receptor: datos.receptor,
                 contenidoOriginal: contenido, mediaPhoneNumberId: datos.phoneNumberId,
                 contenido: contenido || (imagen ? '[Imagen]' : audio ? '[Audio]' : ''), deClienteParaSistema: true, deSistemaParaCliente: false,
@@ -123,7 +144,10 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
                 accionMedia = 'transcribir_audio';
                 await accionesMensaje.registrar(mensaje, accionMedia, 'iniciada');
                 mensaje.usoLLM = true;
-                const respuesta = await openai.transcribirAudio(archivoAudio.buffer, archivoAudio.mimeType, { ...opciones, prompt: configuracion.audio });
+                const respuesta = await openai.transcribirAudio(archivoAudio.buffer, archivoAudio.mimeType, {
+                    ...opciones, prompt: configuracion.audio,
+                    duracionGrabacionSegundos: mensaje.esSimulacion ? audio.duracionSegundos : undefined,
+                });
                 mensaje.transcripcionAudio = respuesta.resultado;
                 respuestas.push(respuesta);
                 await accionesMensaje.registrar(mensaje, accionMedia, 'ok');
@@ -132,8 +156,9 @@ async function procesarMensajeWhatsapp(telefono, contenido, imagen, audio, datos
     } catch (error) {
         falloProcesamiento = true;
         mensaje.estadoBot = 'omitido';
+        if (mensaje.esSimulacion) mensaje.errorBot = error.message;
         await accionesMensaje.registrar(mensaje, accionMedia || 'procesar_archivo', 'error', { error: error.message });
-        console.error('No se pudo procesar el mensaje de WhatsApp:', error);
+        console.error('No se pudo procesar el mensaje entrante:', error);
     } finally {
         respuestaOpenAi = [mensaje.transcripcionImagen, mensaje.transcripcionAudio].filter(Boolean).join('\n') || null;
         mensaje.contenido = [contenido, mensaje.transcripcionImagen, mensaje.transcripcionAudio].filter(Boolean).join('\n')
@@ -160,18 +185,31 @@ function responderMensajePorApiWhataspp(conversacionId, contenido, datos = {}) {
 async function enviarMensajeVendedor(conversacionId, contenido, datos) {
     const conversacion = await Conversacion.findById(conversacionId);
     if (!conversacion?.telefono) throw new Error('La conversación no tiene teléfono de contacto.');
+    if (conversacion.canal === 'simulador') {
+        return require('./simulador').serializarOperacionTest(async function enviarMensajeManualTestEnOrden() {
+            const actual = await Conversacion.findById(conversacionId);
+            if (actual.versionSimulador !== conversacion.versionSimulador) throw new Error('La conversación de Test se reinició. Volvé a enviar el mensaje.');
+            return enviarYGuardarMensajeVendedor(actual, contenido, datos);
+        });
+    }
+    return enviarYGuardarMensajeVendedor(conversacion, contenido, datos);
+}
+
+async function enviarYGuardarMensajeVendedor(conversacion, contenido, datos) {
+    const conversacionId = conversacion._id;
     const recibido = await Mensaje.findOne({ conversacionId, deClienteParaSistema: true }).sort({ createdAt: -1, _id: -1 });
     let mensaje;
     try {
         await envios.serializar(async () => {
-            await envios.verificarLimiteMensual();
             const actual = await Conversacion.findById(conversacionId);
-            const crudo = await require('./whatsapp').enviarMensaje({ to: conversacion.telefono, text: contenido,
+            if (actual.canal !== 'simulador') await envios.verificarLimiteMensual();
+            const crudo = await envios.enviarPorCanal(actual, { to: conversacion.telefono, text: contenido,
                 phoneNumberId: recibido?.mediaPhoneNumberId });
             const whatsappId = crudo?.messages?.[0]?.id;
-            if (typeof whatsappId !== 'string' || !whatsappId) throw new Error('WhatsApp no confirmó el envío.');
             const fechaEmitida = new Date();
             mensaje = await Mensaje.create({ conversacionId, contenido, emisor: recibido?.receptor,
+                esSimulacion: actual.canal === 'simulador',
+                versionSimulador: actual.canal === 'simulador' ? actual.versionSimulador : undefined,
                 receptor: conversacion.telefono, mediaPhoneNumberId: recibido?.mediaPhoneNumberId,
                 vendedorId: datos.usuarioId, deClienteParaSistema: false, deSistemaParaCliente: true,
                 respuestaAutomatica: false, usoLLM: false, whatsappId, crudo, fechaEmitida,
@@ -194,5 +232,6 @@ async function enviarMensajeVendedor(conversacionId, contenido, datos) {
 
 module.exports = {
     recibirMensajeWhatsapp,
+    recibirMensajeSimulado,
     responderMensajePorApiWhataspp,
 };

@@ -1,0 +1,17 @@
+:root { font-family: system-ui, sans-serif; color: #18332c; background: #f1f5f3; }
+* { box-sizing: border-box; }
+body { max-width: 760px; margin: 40px auto; padding: 0 16px; }
+section, article { background: #fff; padding: 20px; margin: 16px 0; border: 1px solid #d6e1dc; border-radius: 8px; }
+h1 { font-size: 26px; } h2 { font-size: 19px; }
+p, li { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+button, .boton { display: inline-block; background: #008069; color: white; padding: 12px 18px; border: 0; border-radius: 6px; font: inherit; cursor: pointer; text-decoration: none; }
+button:disabled { opacity: .55; cursor: default; }
+.nota, time { color: #586b64; font-size: 14px; }
+li { margin: 12px 0; padding: 10px; }
+.pendiente, .requiere-intervencion { background: #fff6df; border-left: 4px solid #ad7100; }
+.seleccionada { outline: 2px solid #ad7100; }
+.enviado { margin-left: 24px; background: #e5f5eb; }
+.requiere-intervencion { background: #fff6df; }
+article p { margin-bottom: 0; }
+article header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+[hidden] { display: none !important; }

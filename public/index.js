@@ -47,7 +47,28 @@ socket.on('connect_error', error => {
 
 function recibirCambios({ conversacion, mensaje }) {
     if (conversacion) {
-        const actual = conversaciones.find(c => c._id === conversacion._id);
+        let actual = conversaciones.find(c => c._id === conversacion._id);
+        if (conversacion.canal === 'simulador') {
+            const versionConocida = actual?.versionSimulador || 0;
+            const versionRecibida = conversacion.versionSimulador || 0;
+            if (versionRecibida < versionConocida) return;
+            if (versionRecibida > versionConocida) {
+                solicitudConversaciones++;
+                if (conversacionActual?._id === conversacion._id) {
+                    limpiarAdjuntoSimulador();
+                    cerrarDetalleMensaje();
+                    mensajes = [];
+                    paginaMensajes = 0;
+                    hayMasMensajes = false;
+                    $('#mensajes').empty();
+                    $('#texto-mensaje').val('');
+                    $('#estado-simulador').text('Se inició una prueba nueva. La conversación está limpia.');
+                    conversacionActual = conversacion;
+                }
+                // La prueba nueva reemplaza también los campos que dejaron de existir (resumen, último mensaje, etc.).
+                actual = null;
+            }
+        }
         if (actual) Object.assign(actual, conversacion);
         if (conversacionActual?._id === conversacion._id) Object.assign(conversacionActual, conversacion);
         conversaciones = [actual || conversacion, ...conversaciones.filter(c => c._id !== conversacion._id)];
@@ -55,6 +76,7 @@ function recibirCambios({ conversacion, mensaje }) {
         actualizarControlBot();
     }
     if (mensaje && conversacionActual?._id === mensaje.conversacionId) {
+        if (mensaje.esSimulacion && (mensaje.versionSimulador || 0) !== (conversacionActual.versionSimulador || 0)) return;
         const posicion = mensajes.findIndex(m => m._id === mensaje._id);
         if (posicion === -1) mensajes.push(mensaje);
         else mensajes[posicion] = mensaje;
@@ -180,9 +202,11 @@ function escaparHtml(texto) {
 }
 
 function actualizarControlBot() {
+    actualizarControlesSimulador();
     const botActivo = !!conversacionActual?.botActivo;
     $('#bot-activo').prop('checked', botActivo)
-        .prop('disabled', !conversacionActual || guardandoBot === conversacionActual._id);
+        .prop('disabled', !conversacionActual || guardandoBot === conversacionActual._id
+            || (conversacionActual.canal === 'simulador' && reiniciandoSimulador));
     $('#estado-bot').text(botActivo ? 'Bot activo' : 'Bot inactivo');
     $('.control-bot').attr('data-activo', String(botActivo));
 
@@ -348,7 +372,10 @@ function listarConversaciones(){
 async function obtenerMensajes(conversacionId, pagina = 0){
     const conversacion = conversaciones.find(c => c._id === conversacionId);
     if (!conversacion || (pagina > 0 && cargandoMensajes)) return;
+    const versionSimulador = conversacion.versionSimulador || 0;
     if (pagina === 0) {
+        if (conversacionActual?._id !== conversacionId
+            || (conversacion.canal === 'simulador' && (conversacionActual.versionSimulador || 0) !== versionSimulador)) limpiarAdjuntoSimulador();
         cerrarDetalleMensaje();
         conversacionActual = conversacion;
         mensajes = [];
@@ -365,9 +392,11 @@ async function obtenerMensajes(conversacionId, pagina = 0){
     }
     cargandoMensajes = true;
     $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
+    actualizarControlesSimulador();
     try{
         const respuesta = await $.get('/conversacion/mensajes', { conversacionId, pagina });
         if (conversacionActual?._id !== conversacionId) return;
+        if (conversacion.canal === 'simulador' && (conversacionActual.versionSimulador || 0) !== versionSimulador) return;
         const altoAnterior = $('#mensajes')[0].scrollHeight;
         const posicionAnterior = $('#mensajes').scrollTop();
         mensajes = pagina === 0 ? respuesta.reverse()
@@ -384,6 +413,7 @@ async function obtenerMensajes(conversacionId, pagina = 0){
             cargandoMensajes = false;
             $('#texto-mensaje').prop('disabled', enviandoMensaje);
             $('#btn-enviar-mensaje').prop('disabled', enviandoMensaje || !socket.connected);
+            actualizarControlesSimulador();
         }
     }
 }
@@ -399,6 +429,15 @@ function textoOriginal(mensaje) {
         else if (texto.endsWith('\n' + inferencia)) texto = texto.slice(0, -inferencia.length - 1);
     }
     return ['[Imagen]', '[Audio]'].includes(texto) && (mensaje.esImagen || mensaje.esAudio) ? '' : texto;
+}
+
+function urlImagenMensaje(mensaje) {
+    if (mensaje.imagenArchivo) return '/uploads/imagenes/' + encodeURIComponent(mensaje.imagenArchivo);
+    try {
+        const url = new URL(mensaje.imagenUrl);
+        if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.href;
+    } catch { /* Sin imagen pública válida. */ }
+    return null;
 }
 
 function listarMensajes(){
@@ -417,9 +456,9 @@ function listarMensajes(){
         }
         const media = fila.find('.mensaje-media');
         // Conserva los elementos multimedia al actualizar por socket, incluido el audio que está reproduciéndose.
-        for (const [tipo, archivo] of [['imagen', mensaje.imagenArchivo], ['audio', mensaje.audioArchivo]]) {
-            if (!archivo || media.find('[data-media-tipo="' + tipo + '"]').length) continue;
-            const url = '/uploads/' + (tipo === 'imagen' ? 'imagenes' : 'audio') + '/' + encodeURIComponent(archivo);
+        for (const [tipo, url] of [['imagen', urlImagenMensaje(mensaje)],
+            ['audio', mensaje.audioArchivo ? '/uploads/audio/' + encodeURIComponent(mensaje.audioArchivo) : null]]) {
+            if (!url || media.find('[data-media-tipo="' + tipo + '"]').length) continue;
             const bloque = $('<div>', { 'data-media-tipo': tipo });
             const elemento = tipo === 'audio'
                 ? $('<audio>', { controls: true, preload: 'none', src: url, 'aria-label': 'Reproducir audio del mensaje' })
@@ -443,6 +482,11 @@ function listarMensajes(){
         }
         const fecha = new Date(mensaje.fechaEmitida || mensaje.createdAt);
         const meta = fila.find('.mensaje-meta').empty();
+        if (mensaje.esSimulacion) {
+            const estado = mensaje.deClienteParaSistema ? (mensaje.estadoBot || 'recibido') : 'respuesta local';
+            meta.append($('<span>').text('Test · ' + estado + (mensaje.estadoBot === 'pendiente' ? ' · ' + mensaje.segundosEsperaSimulada + ' s' : '')));
+            if (mensaje.errorBot) meta.append($('<span>', { class: 'estado-envio-error', title: mensaje.errorBot }).text('Error'));
+        }
         if (!Number.isNaN(fecha.getTime())) {
             meta.append($('<time>', { datetime: fecha.toISOString(), title: fecha.toLocaleString('es-AR') })
                 .text(fecha.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false })));
@@ -457,6 +501,7 @@ function listarMensajes(){
 }
 
 async function enviarMensaje(){
+    if (conversacionActual?.canal === 'simulador') return enviarMensajeTest();
     const contenido = $('#texto-mensaje').val().trim();
     const conversacion = conversacionActual;
     if (!conversacion || !contenido || enviandoMensaje || $('#btn-enviar-mensaje').prop('disabled')) return;
@@ -482,6 +527,7 @@ async function enviarMensaje(){
         enviandoMensaje = false;
         $('#texto-mensaje').prop('disabled', !conversacionActual || cargandoMensajes);
         $('#btn-enviar-mensaje').prop('disabled', !conversacionActual || cargandoMensajes || !socket.connected);
+        actualizarControlesSimulador();
     }
 }
 
@@ -521,13 +567,14 @@ async function cargarPrompts() {
     const id = promptActual?.id;
     promptActual = null;
     $('#prompt-estado').text('Cargando…');
-    $('#prompt-selector, #prompt-contenido, #btn-guardar-prompt').prop('disabled', true);
+    $('#prompt-selector, #prompt-contenido, #btn-guardar-prompt, #btn-cargar-prompts').prop('disabled', true);
     try {
         const lista = await $.get('/prompts/obtener');
         if (solicitud !== solicitudPrompts) return;
         promptsDisponibles = lista;
         $('#prompt-selector').html(lista.map(item => `<option value="${escaparHtml(item.id)}">${escaparHtml(item.nombre)}</option>`).join('')).prop('disabled', false);
         seleccionarPrompt(lista.some(item => item.id === id) ? id : lista[0]?.id);
+        $('#btn-cargar-prompts').prop('disabled', false);
     } catch (error) {
         if (solicitud !== solicitudPrompts) return;
         $('#prompt-estado').text(error.responseJSON?.error || 'No se pudieron cargar los prompts.');
@@ -581,6 +628,88 @@ async function guardarPrompt() {
     }
 }
 
+async function descargarPrompts() {
+    if (guardandoPrompt) return;
+    $('#btn-descargar-prompts').prop('disabled', true);
+    try {
+        const respuesta = await fetch('/prompts/descargar');
+        if (!respuesta.ok) throw new Error((await respuesta.json()).error);
+        const url = URL.createObjectURL(await respuesta.blob());
+        const enlace = document.createElement('a');
+        enlace.href = url;
+        enlace.download = 'prompts.json';
+        document.body.appendChild(enlace);
+        enlace.click();
+        enlace.remove();
+        setTimeout(function liberarArchivoPrompts() { URL.revokeObjectURL(url); }, 1000);
+        $('#prompt-estado').text('Archivo descargado con los prompts guardados.' + (hayCambiosPrompt() ? ' Los cambios sin guardar no están incluidos.' : ''));
+    } catch (error) {
+        $('#prompt-estado').text(error.message || 'No se pudieron descargar los prompts.');
+    } finally {
+        $('#btn-descargar-prompts').prop('disabled', guardandoPrompt);
+    }
+}
+
+async function importarArchivoPrompts() {
+    const archivo = document.getElementById('archivo-prompts').files[0];
+    if (!archivo || guardandoPrompt || !promptActual) return;
+    if (!await confirmarDescartar()) { $('#archivo-prompts').val(''); return; }
+    if (guardandoPrompt || !promptActual) return;
+    const solicitud = ++solicitudPrompts;
+    const id = promptActual.id;
+    const versiones = Object.fromEntries(promptsDisponibles.map(item => [item.id, item.version]));
+    guardandoPrompt = true;
+    $('#modal-prompts input, #modal-prompts textarea, #modal-prompts select, #modal-prompts button').prop('disabled', true);
+    $('#prompt-estado').text('Cargando archivo…');
+    try {
+        if (archivo.size > 1024 * 1024) throw new Error('El archivo no puede superar 1 MB.');
+        let configuracion;
+        try { configuracion = JSON.parse(await archivo.text()); }
+        catch (error) { throw new Error('El archivo debe ser un JSON válido como el que genera Descargar todos.'); }
+        const lista = await $.post({ url: '/prompts/cargar', contentType: 'application/json',
+            data: JSON.stringify({ prompts: configuracion, versiones }) });
+        if (solicitud !== solicitudPrompts) return;
+        promptsDisponibles = lista;
+        seleccionarPrompt(id);
+        $('#prompt-estado').text('Todos los prompts fueron cargados. Se usarán en los próximos mensajes.');
+    } catch (error) {
+        if (solicitud !== solicitudPrompts) return;
+        $('#prompt-estado').text(error.responseJSON?.error || error.message || 'No se pudieron cargar los prompts.');
+        if (error.status === 401) { socket.disconnect(); $('body').attr('data-estado', 'login'); limpiarPrompts(); }
+    } finally {
+        guardandoPrompt = false;
+        $('#archivo-prompts').val('');
+        $('#modal-prompts input, #modal-prompts textarea, #modal-prompts select, #modal-prompts button').prop('disabled', false);
+        $('#btn-guardar-prompt').prop('disabled', !hayCambiosPrompt());
+    }
+}
+
+async function crearInvitacionNotificaciones() {
+    $('#btn-notificaciones').prop('disabled', true);
+    try {
+        const invitacion = await $.post('/notificaciones/tokens');
+        await Swal.fire({ title: 'Invitación a notificaciones',
+            text: `Este enlace sirve una sola vez y vence a las ${new Date(invitacion.venceEn).toLocaleTimeString()}. Copialo y compartilo con el vendedor.`,
+            input: 'text', inputValue: invitacion.url, inputAttributes: { readonly: 'readonly' },
+            confirmButtonText: 'Copiar enlace', showCancelButton: true, cancelButtonText: 'Cerrar',
+            preConfirm: async function copiarEnlaceInvitacion() {
+                try { await navigator.clipboard.writeText(invitacion.url); }
+                catch (error) { Swal.showValidationMessage('Seleccioná el enlace y copialo manualmente.'); return false; }
+            },
+        });
+    } catch (error) {
+        Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudo crear la invitación.' });
+    } finally {
+        $('#btn-notificaciones').prop('disabled', false);
+    }
+}
+
+$('#btn-notificaciones').on('click', crearInvitacionNotificaciones);
+$('#btn-descargar-prompts').on('click', descargarPrompts);
+$('#btn-cargar-prompts').on('click', function elegirArchivoPrompts() {
+    if (!guardandoPrompt && promptActual) $('#archivo-prompts').trigger('click');
+});
+$('#archivo-prompts').on('change', importarArchivoPrompts);
 $('#btn-prompts').on('click', mostrarPrompts);
 $('#btn-descartar-prompt').on('click', () => resolverDescarte(true));
 $('#btn-conservar-prompt').on('click', () => resolverDescarte(false));

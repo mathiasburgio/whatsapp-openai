@@ -164,7 +164,10 @@ async function enviarMensaje({ to, text, phoneNumberId = defaultPhoneNumberId, r
     };
 
     if (replyToMessageId) payload.context = { message_id: replyToMessageId };
+    return enviarPayload(payload, phoneNumberId);
+}
 
+async function enviarPayload(payload, phoneNumberId) {
     const response = await fetch(
         `${graphApiBaseUrl}/${apiVersion}/${encodeURIComponent(phoneNumberId)}/messages`,
         {
@@ -191,10 +194,34 @@ async function enviarMensaje({ to, text, phoneNumberId = defaultPhoneNumberId, r
     return responseBody;
 }
 
+async function enviarMensajeConImagen({ to, text = '', imageUrl, phoneNumberId = defaultPhoneNumberId, replyToMessageId=null }) {
+    const url = typeof imageUrl === 'string' && URL.canParse(imageUrl) ? new URL(imageUrl) : null;
+    if (!accessToken || !phoneNumberId || typeof to !== 'string' || !/^\d{5,20}$/.test(to)
+        || typeof text !== 'string' || text.length > 1024
+        || !url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+        throw Object.assign(new Error('Faltan credenciales de WhatsApp o los datos del envío son inválidos.'), { envioNoIniciado: true });
+    }
+    const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'image',
+        image: {
+            link: imageUrl,
+            ...(text.trim() ? { caption: text } : {}),
+        },
+    };
+
+    if (replyToMessageId) payload.context = { message_id: replyToMessageId };
+
+    return enviarPayload(payload, phoneNumberId);
+}
+
 module.exports = {
     recibirMensajeWebhook,
     registrarEstado,
     configurarWebhook,
     enviarMensaje,
     obtenerMediaDesdeWhatsapp,
+    enviarMensajeConImagen,
 };

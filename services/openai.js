@@ -19,9 +19,10 @@ function crearConfiguracion(opciones = {}) {
     return configuracion;
 }
 
-function validarTexto(texto) {
+function validarTexto(texto, maxCaracteres = 30_000) {
+    if (!Number.isSafeInteger(maxCaracteres) || maxCaracteres < 1 || maxCaracteres > 2_000_000) throw new Error('Límite de caracteres de entrada inválido.');
     if (typeof texto !== 'string' || !texto.trim()) throw new Error('El texto no puede estar vacío.');
-    if (texto.length > 30_000) throw new Error('El texto no puede superar los 30_000 caracteres.');
+    if (texto.length > maxCaracteres) throw new Error(`El texto no puede superar los ${maxCaracteres.toLocaleString('en-US').replaceAll(',', '_')} caracteres.`);
 }
 
 function crearCuerpo(input, configuracion) {
@@ -152,7 +153,7 @@ async function consultarOpenAI(url, cuerpo, configuracion, tipo, segundos = 0) {
 }
 
 async function procesarTexto(texto, opciones = {}) {
-    validarTexto(texto);
+    validarTexto(texto, opciones.maxCaracteresEntrada ?? 30_000);
     const configuracion = crearConfiguracion(opciones);
     return consultarOpenAI(RESPONSES_API_URL, crearCuerpo(texto, configuracion), configuracion, 'texto');
 }
@@ -211,7 +212,11 @@ async function transcribirAudio(buffer, mimeType = 'audio/webm', opciones = {}) 
     const contexto = opciones.prompt || 'Transcribí este audio.';
     const { parseBuffer } = await import('music-metadata');
     const { format } = await parseBuffer(buffer, { mimeType: tipo, size: buffer.length }, { duration: true });
-    const segundosAudio = Math.ceil(format.duration);
+    // MediaRecorder puede producir WebM sin duración en sus metadatos.
+    const duracionGrabacion = Number(opciones.duracionGrabacionSegundos);
+    const duracion = Number.isFinite(format.duration) && format.duration > 0 ? format.duration
+        : (Number.isFinite(duracionGrabacion) && duracionGrabacion > 0 && duracionGrabacion <= 120 ? duracionGrabacion : NaN);
+    const segundosAudio = Math.ceil(duracion);
     if (!Number.isFinite(segundosAudio) || segundosAudio <= 0) throw new Error('No se pudo determinar la duración del audio.');
     const modelo = opciones.modeloAudio || opciones.modelo || process.env.OPENAI_TRANSCRIPTION_MODEL || process.env.OPENAI_AUDIO_MODEL || 'gpt-4o-mini-transcribe';
     const configuracion = crearConfiguracion({ ...opciones, modelo });

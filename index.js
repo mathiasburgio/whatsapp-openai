@@ -34,16 +34,33 @@ if( !fs.existsSync(path.join(__dirname, '/uploads'))) fs.mkdirSync(path.join(__d
 if( !fs.existsSync(path.join(__dirname, '/uploads/audio'))) fs.mkdirSync(path.join(__dirname, '/uploads/audio'));
 if( !fs.existsSync(path.join(__dirname, '/uploads/imagenes'))) fs.mkdirSync(path.join(__dirname, '/uploads/imagenes'));
 
-// Midleware necesario para validar mensajes de WhatsApp entrantes
-app.use(express.json({ verify: obtenerRawBody }));
-
 app.use(middlewareSesion);
 
 //inicializo el servicio de sockets
 socketsService.inicializar(server, middlewareSesion);
 
-// Ruta index
-app.get('/', (req, res) => {
+// El límite de adjuntos del simulador se aplica únicamente dentro de una sesión habilitada.
+app.use('/simulador', tieneSesion, require('./services/simulador').router);
+
+// El archivo completo de prompts puede superar el límite JSON habitual.
+app.post('/prompts/cargar', tieneSesion, express.json({ limit: '1mb' }), async function cargarArchivoPrompts(req, res) {
+    try {
+        const prompts = await promptsService.importar(req.body?.prompts, req.body?.versiones);
+        res.set('Cache-Control', 'no-store');
+        res.json(prompts);
+    } catch (error) {
+        if (!error.status) console.error(error);
+        res.status(error.status || 500).json({ error: error.status ? error.message : 'No se pudieron cargar los prompts.' });
+    }
+});
+
+// Middleware necesario para validar mensajes de WhatsApp entrantes.
+app.use(express.json({ verify: obtenerRawBody }));
+
+app.use('/notificaciones', require('./services/notificaciones').router);
+
+// El panel conserva también su dirección anterior.
+app.get(['/', '/panel'], (req, res) => {
     res.sendFile(path.join(__dirname,"public",'index.html'));
 });
 
@@ -181,6 +198,17 @@ app.get('/prompts/obtener', tieneSesion, async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'No se pudieron cargar los prompts.' });
+    }
+});
+
+app.get('/prompts/descargar', tieneSesion, async function descargarArchivoPrompts(req, res) {
+    try {
+        res.set('Cache-Control', 'no-store');
+        const configuracion = await promptsService.cargar();
+        res.attachment('prompts.json').type('application/json').send(JSON.stringify(configuracion, null, 2) + '\n');
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'No se pudieron descargar los prompts.' });
     }
 });
 

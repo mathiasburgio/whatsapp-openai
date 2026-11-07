@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Avisos vendedores">
+    <title>Recibir notificaciones</title>
+    <link rel="stylesheet" href="/notificaciones.css">
+</head>
+<body>
+    <section>
+        <h1>Confirmá recibir notificaciones</h1>
+        <p>Te avisaremos cuando una consulta necesite la intervención de un vendedor.</p>
+        <p id="estado" role="status" aria-live="polite">Comprobando invitación…</p>
+        <button id="confirmar" type="button" disabled>Sí, recibir notificaciones</button>
+        <p class="nota">Al confirmar, el navegador te pedirá permiso. La invitación se utiliza una sola vez y vence a los 60 minutos.</p>
+    </section>
+    <script src="/notificaciones-adhesion.js"></script>
+</body>
+</html>

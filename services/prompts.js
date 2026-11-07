@@ -25,7 +25,9 @@ async function leer(id) {
     const contenido = await fs.readFile(path.join(carpeta, definicion.archivo), 'utf8');
     return { ...definicion, contenido, version: version(contenido) };
 }
-async function listar() { return Promise.all(definiciones.map(item => leer(item.id))); }
+async function leerTodos() { return Promise.all(definiciones.map(item => leer(item.id))); }
+// Una lectura completa espera al lote en curso para no mezclar versiones de distintos archivos.
+async function listar() { return serializarGuardado(leerTodos); }
 async function cargar() {
     const configuracion = Object.fromEntries((await listar()).map(item => [item.id, item.contenido]));
     return configuracion;
@@ -41,24 +43,65 @@ async function guardar(id, contenido, versionAnterior) {
         throw error('El prompt debe tener entre 1 y 16000 caracteres, sin caracteres nulos.', 400);
     }
     if (typeof versionAnterior !== 'string' || !/^[a-f0-9]{64}$/.test(versionAnterior)) throw error('Falta la versión del prompt. Volvé a cargarlo.', 400);
-    // Serializa también cambios de distintos archivos que comparten el límite de instrucciones.
-    const anterior = escrituras.get('todos') || Promise.resolve();
-    const operacion = anterior.catch(() => {}).then(async () => {
+    return serializarGuardado(async function guardarPromptEnOrden() {
         const actual = await leer(id);
         if (actual.version !== versionAnterior) throw error('El prompt cambió en otro editor. Volvé a cargarlo antes de guardar.', 409);
-        const configuracion = await cargar();
+        const configuracion = Object.fromEntries((await leerTodos()).map(item => [item.id, item.contenido]));
         configuracion[id] = contenido;
         for (const etapa of ['orquestador', 'respuesta', 'resumen']) instrucciones(configuracion, etapa);
-        const destino = path.join(carpeta, actual.archivo);
-        const temporal = path.join(carpeta, '.' + randomUUID() + '.tmp');
-        try {
-            await fs.writeFile(temporal, contenido, { encoding: 'utf8', flag: 'wx' });
-            await fs.rename(temporal, destino);
-        } finally { await fs.rm(temporal, { force: true }); }
+        await escribirPrompt(actual.archivo, contenido);
         return { ...actual, contenido, version: version(contenido) };
     });
-    escrituras.set('todos', operacion);
-    try { return await operacion; }
-    finally { if (escrituras.get('todos') === operacion) escrituras.delete('todos'); }
 }
-module.exports = { leer, listar, cargar, instrucciones, guardar };
+
+// Los guardados individuales y las cargas completas comparten la misma cola.
+async function serializarGuardado(guardarCambios) {
+    const anterior = escrituras.get('todos') || Promise.resolve();
+    const pendiente = anterior.catch(() => {}).then(guardarCambios);
+    escrituras.set('todos', pendiente);
+    try { return await pendiente; }
+    finally { if (escrituras.get('todos') === pendiente) escrituras.delete('todos'); }
+}
+
+async function escribirPrompt(archivo, contenido) {
+    const temporal = path.join(carpeta, '.' + randomUUID() + '.tmp');
+    try {
+        await fs.writeFile(temporal, contenido, { encoding: 'utf8', flag: 'wx' });
+        await fs.rename(temporal, path.join(carpeta, archivo));
+    } finally { await fs.rm(temporal, { force: true }); }
+}
+
+async function importar(configuracion, versiones) {
+    if (!configuracion || typeof configuracion !== 'object' || Array.isArray(configuracion)
+        || Object.keys(configuracion).length !== definiciones.length
+        || definiciones.some(item => typeof configuracion[item.id] !== 'string')) {
+        throw error('El archivo debe contener todos los prompts activos, con su ID y contenido.', 400);
+    }
+    for (const { id } of definiciones) {
+        const contenido = configuracion[id];
+        if (!contenido.trim() || contenido.length > 16000 || contenido.includes('\0')) {
+            throw error(`El prompt ${id} debe tener entre 1 y 16000 caracteres, sin caracteres nulos.`, 400);
+        }
+    }
+    for (const etapa of ['orquestador', 'respuesta', 'resumen']) instrucciones(configuracion, etapa);
+    return serializarGuardado(async function importarPromptsEnOrden() {
+        const actuales = await leerTodos();
+        if (actuales.some(item => item.version !== versiones?.[item.id])) {
+            throw error('Los prompts cambiaron en otro editor. Volvé a cargarlos antes de importar.', 409);
+        }
+        const escritos = [];
+        try {
+            for (const actual of actuales) {
+                await escribirPrompt(actual.archivo, configuracion[actual.id]);
+                escritos.push(actual);
+            }
+        } catch (errorEscritura) {
+            // Recupera los archivos ya reemplazados si falla una escritura del lote.
+            for (const anterior of escritos) await escribirPrompt(anterior.archivo, anterior.contenido);
+            throw errorEscritura;
+        }
+        return leerTodos();
+    });
+}
+
+module.exports = { leer, listar, cargar, instrucciones, guardar, importar };

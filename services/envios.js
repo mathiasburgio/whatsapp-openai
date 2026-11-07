@@ -28,4 +28,23 @@ async function verificarLimiteMensual() {
     if (cantidad >= limite) throw new Error('Se alcanzó el límite mensual de respuestas de WhatsApp.');
 }
 
-module.exports = { serializar, verificarLimiteMensual, bonificadoReferral };
+// Los mensajes de Test se guardan por el mismo flujo, sin contactar a Meta.
+async function enviarPorCanal(conversacion, datos) {
+    if (conversacion.canal === 'simulador') {
+        const url = datos.imageUrl && URL.canParse(datos.imageUrl) ? new URL(datos.imageUrl) : null;
+        if (typeof datos.text !== 'string' || !datos.text.trim() || datos.text.length > (datos.imageUrl ? 1024 : 4096)
+            || (datos.imageUrl && (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password))) {
+            throw Object.assign(new Error('La respuesta no cumple los límites de texto o imagen del canal.'), { envioNoIniciado: true });
+        }
+        return { simulado: true };
+    }
+    const whatsapp = require('./whatsapp');
+    const enviar = datos.imageUrl ? whatsapp.enviarMensajeConImagen : whatsapp.enviarMensaje;
+    const respuesta = await enviar(datos);
+    if (typeof respuesta?.messages?.[0]?.id !== 'string' || !respuesta.messages[0].id) {
+        throw new Error('WhatsApp no confirmó el ID del mensaje enviado.');
+    }
+    return respuesta;
+}
+
+module.exports = { serializar, verificarLimiteMensual, bonificadoReferral, enviarPorCanal };

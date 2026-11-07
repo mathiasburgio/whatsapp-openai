@@ -4,6 +4,9 @@ const mixed = mongoose.Schema.Types.Mixed;
 
 const mensajeSchema = new mongoose.Schema({
     conversacionId: oid,
+    esSimulacion: { type: Boolean, default: false },
+    versionSimulador: { type: Number, min: 0 },
+    segundosEsperaSimulada: { type: Number, enum: [1, 5, 10, 15, 20] },
     whatsappId: String, //ID entrante de Meta; evita duplicados por reintentos del webhook
     deClienteParaSistema: Boolean, //ordena en un boolean el sentido de la coversacion
     deSistemaParaCliente: Boolean, //ordena en un boolean el sentido de la coversacion
@@ -38,6 +41,7 @@ const mensajeSchema = new mongoose.Schema({
     
     esImagen: Boolean,
     imagenArchivo: String,
+    imagenUrl: String, //foto pública del catálogo adjunta a una respuesta saliente
     transcripcionImagen: String,
 
     fechaEmitida: Date, // cuando se deriva el mensaje
