@@ -4,6 +4,7 @@ const http = require('http');
 const express = require('express');
 const app = express();
 const server = http.createServer(app);
+app.set('trust proxy', 2);
 
 //importo middlewares
 const tieneSesion = require('./middlewares/tieneSesion');
