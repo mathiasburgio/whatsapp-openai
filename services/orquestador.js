@@ -169,7 +169,7 @@ async function procesarMensajeEntrante(telefono, contenido, imagen, audio, datos
             [campo, (mensaje.tokens?.[campo] || 0) + tokens[campo]]));
         await mensaje.save();
         await actualizarConversacion(conversacion, mensaje, tokens);
-        console.log({ mensaje: mensaje.contenido, respuestaOpenAi });
+        // console.log({ mensaje: mensaje.contenido, respuestaOpenAi });
     }
     if (falloProcesamiento) return { conversacion, mensaje, respuestaOpenAi };
     try { await bot.encolar(mensaje); }
