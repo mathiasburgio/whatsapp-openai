@@ -13,6 +13,7 @@ const clavesSchema = new mongoose.Schema({
 // No lleva TTL: el vencimiento del enlace no debe borrar una suscripción confirmada.
 const conexionSchema = new mongoose.Schema({
     _id: { type: String, default: randomUUID },
+    nombre: { type: String, trim: true, maxlength: 100 },
     venceEn: Date,
     utilizadaEn: Date,
     suscripcion: mongoose.Schema.Types.Mixed,
@@ -23,6 +24,7 @@ const avisoSchema = new mongoose.Schema({
     _id: { type: String, default: randomUUID },
     conversacionId: mongoose.Schema.Types.ObjectId,
     accionId: mongoose.Schema.Types.ObjectId,
+    versionSimulador: Number,
 }, { timestamps: true });
 
 module.exports = {

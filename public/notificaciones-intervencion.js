@@ -6,7 +6,8 @@ async function cargarIntervencion() {
         if (!respuesta.ok) throw new Error(datos.error);
         const { conversacion, mensajes, accionId } = datos;
         document.getElementById('contacto').textContent = conversacion.nombre || conversacion.telefono;
-        document.getElementById('telefono').textContent = conversacion.telefono;
+        document.getElementById('telefono').textContent = conversacion.canal === 'simulador' ? 'Esta intervención es una prueba del simulador.' : conversacion.telefono;
+        document.getElementById('nota-enviar').hidden = conversacion.canal === 'simulador';
         document.getElementById('resumen').textContent = conversacion.resumen || 'Todavía no hay un resumen generado. Revisá los items pendientes y los mensajes.';
         const numero = (conversacion.telefono || '').replace(/\D/g, '');
         const enviar = document.getElementById('enviar');

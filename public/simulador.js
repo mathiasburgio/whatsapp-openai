@@ -7,6 +7,7 @@ let relojGrabacion = null;
 let solicitandoMicrofono = false;
 let versionGrabacion = 0;
 let reiniciandoSimulador = false;
+let guardandoNotificacionesSimulador = false;
 
 function actualizarControlesSimulador() {
     const activo = conversacionActual?.canal === 'simulador' && $('body').attr('data-estado') === 'conversacion';
@@ -17,6 +18,8 @@ function actualizarControlesSimulador() {
         return;
     }
     const grabando = !!grabadorSimulador;
+    $('#notificaciones-simulador').prop('checked', !!conversacionActual.notificacionesSimulador)
+        .prop('disabled', guardandoNotificacionesSimulador || reiniciandoSimulador || !socket.connected);
     const ocupado = enviandoMensaje || cargandoMensajes || solicitandoMicrofono || reiniciandoSimulador;
     $('#espera-simulador, #btn-imagen-simulador, #btn-quitar-adjunto-simulador').prop('disabled', ocupado || grabando);
     $('#btn-grabar-simulador').prop('disabled', ocupado)
@@ -25,6 +28,23 @@ function actualizarControlesSimulador() {
         .text(reiniciandoSimulador ? 'Limpiando…' : 'Limpiar y empezar de cero');
     $('#texto-mensaje').prop('disabled', enviandoMensaje || cargandoMensajes || reiniciandoSimulador);
     $('#btn-enviar-mensaje').prop('disabled', ocupado || grabando || !socket.connected);
+}
+
+async function cambiarNotificacionesSimulador() {
+    const conversacion = conversacionActual;
+    if (conversacion?.canal !== 'simulador' || guardandoNotificacionesSimulador) return;
+    const habilitadas = $('#notificaciones-simulador').prop('checked');
+    guardandoNotificacionesSimulador = true;
+    $('#notificaciones-simulador').prop('disabled', true);
+    try {
+        const resultado = await solicitarSimulador('notificaciones', { habilitadas, versionSimulador: conversacion.versionSimulador || 0 });
+        if ($('body').attr('data-estado') === 'conversacion') recibirCambios(resultado);
+    } catch (error) {
+        Swal.fire({ icon: 'error', text: error.message });
+    } finally {
+        guardandoNotificacionesSimulador = false;
+        actualizarControlesSimulador();
+    }
 }
 
 function liberarMicrofonoSimulador() {
@@ -280,6 +300,7 @@ async function enviarMensajeTest() {
 }
 
 $('#btn-simulador').on('click', abrirSimulador);
+$('#notificaciones-simulador').on('change', cambiarNotificacionesSimulador);
 $('#imagen-simulador').on('change', seleccionarImagenSimulador);
 $('#btn-imagen-simulador').on('click', function abrirSelectorImagenSimulada() { $('#imagen-simulador').trigger('click'); });
 $('#btn-grabar-simulador').on('click', alternarGrabacionSimulador);

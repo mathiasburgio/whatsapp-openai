@@ -138,6 +138,22 @@ async function limpiarConversacionTest(req, res, next) {
     }
 }
 
+async function configurarNotificacionesTest(req, res, next) {
+    try {
+        const { habilitadas, versionSimulador } = req.body || {};
+        if (typeof habilitadas !== 'boolean') return res.status(400).json({ error: 'Indicá si querés enviar notificaciones de Test.' });
+        const conversacion = await serializarOperacionTest(async function guardarNotificacionesEnPruebaActual() {
+            const actual = await obtenerConversacionTest();
+            comprobarVersionTest(versionSimulador, actual);
+            actual.notificacionesSimulador = habilitadas;
+            await actual.save();
+            await sockets.notificarCambios(actual);
+            return actual;
+        });
+        res.set('Cache-Control', 'no-store').json({ conversacion });
+    } catch (error) { next(error); }
+}
+
 function responderErrorSimulador(error, req, res, next) {
     if (res.headersSent) return next(error);
     if (!error.status || error.status >= 500) console.error('Error del simulador:', error);
@@ -152,6 +168,7 @@ const router = express.Router();
 router.post('/abrir', abrirConversacionTest);
 router.post('/mensajes', express.json({ limit: '22mb' }), recibirMensajeTest);
 router.post('/limpiar', express.json({ limit: '1kb' }), limpiarConversacionTest);
+router.post('/notificaciones', express.json({ limit: '1kb' }), configurarNotificacionesTest);
 router.use(responderErrorSimulador);
 
 module.exports = { router, serializarOperacionTest };

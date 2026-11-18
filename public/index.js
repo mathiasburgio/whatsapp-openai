@@ -16,6 +16,8 @@ let resolverDescartePrompt = null;
 let modoListado = 'ultimas';
 let solicitudConversaciones = 0;
 let enviandoMensaje = false;
+let avisoEnvioManualAceptado = false;
+let versionGestionNotificaciones = 0;
 const socket = io({ autoConnect: false });
 
 socket.on('connect', obtenerConversaciones);
@@ -28,6 +30,7 @@ socket.on('disconnect', motivo => {
         mensajes = [];
         limpiarMetricas();
         limpiarPrompts();
+        cerrarGestionNotificaciones();
         cerrarDetalleMensaje();
         actualizarControlBot();
         $('body').attr('data-estado', 'login');
@@ -40,6 +43,7 @@ socket.on('connect_error', error => {
         $('body').attr('data-estado', 'login');
         limpiarPrompts();
         limpiarMetricas();
+        cerrarGestionNotificaciones();
         cerrarDetalleMensaje();
     }
     Swal.fire({ icon: 'error', text: error.message });
@@ -146,6 +150,7 @@ async function cerrarSesion(){
         actualizarControlBot();
         limpiarMetricas();
         limpiarPrompts();
+        cerrarGestionNotificaciones();
         cerrarDetalleMensaje();
         $('body').attr('data-estado', 'login');
     }catch(error){
@@ -166,6 +171,7 @@ async function obtenerConversaciones(){
         if (conversacionId) await obtenerMensajes(conversacionId);
         else {
             conversacionActual = null; mensajes = []; hayMasMensajes = false;
+            actualizarAvisoEnvioManual();
             $('#mensajes').empty(); $('#nombre-conversacion').text('Seleccioná una conversación');
             $('#telefono-conversacion').text('');
             $('#texto-mensaje, #btn-enviar-mensaje').prop('disabled', true);
@@ -374,10 +380,12 @@ async function obtenerMensajes(conversacionId, pagina = 0){
     if (!conversacion || (pagina > 0 && cargandoMensajes)) return;
     const versionSimulador = conversacion.versionSimulador || 0;
     if (pagina === 0) {
+        if (conversacionActual?._id !== conversacionId) avisoEnvioManualAceptado = false;
         if (conversacionActual?._id !== conversacionId
             || (conversacion.canal === 'simulador' && (conversacionActual.versionSimulador || 0) !== versionSimulador)) limpiarAdjuntoSimulador();
         cerrarDetalleMensaje();
         conversacionActual = conversacion;
+        actualizarAvisoEnvioManual();
         mensajes = [];
         paginaMensajes = 0;
         hayMasMensajes = false;
@@ -416,6 +424,18 @@ async function obtenerMensajes(conversacionId, pagina = 0){
             actualizarControlesSimulador();
         }
     }
+}
+
+function actualizarAvisoEnvioManual() {
+    const mostrar = !!conversacionActual && conversacionActual.canal !== 'simulador' && !avisoEnvioManualAceptado;
+    $('#aviso-envio-manual').prop('hidden', !mostrar);
+    $('#controles-envio').prop('inert', mostrar);
+}
+
+function aceptarAvisoEnvioManual() {
+    avisoEnvioManualAceptado = true;
+    actualizarAvisoEnvioManual();
+    if (!$('#texto-mensaje').prop('disabled')) $('#texto-mensaje').trigger('focus');
 }
 
 function textoOriginal(mensaje) {
@@ -684,27 +704,121 @@ async function importarArchivoPrompts() {
     }
 }
 
-async function crearInvitacionNotificaciones() {
-    $('#btn-notificaciones').prop('disabled', true);
+async function cargarSuscripcionesNotificaciones() {
+    const version = versionGestionNotificaciones;
     try {
-        const invitacion = await $.post('/notificaciones/tokens');
-        await Swal.fire({ title: 'Invitación a notificaciones',
-            text: `Este enlace sirve una sola vez y vence a las ${new Date(invitacion.venceEn).toLocaleTimeString()}. Copialo y compartilo con el vendedor.`,
-            input: 'text', inputValue: invitacion.url, inputAttributes: { readonly: 'readonly' },
-            confirmButtonText: 'Copiar enlace', showCancelButton: true, cancelButtonText: 'Cerrar',
-            preConfirm: async function copiarEnlaceInvitacion() {
-                try { await navigator.clipboard.writeText(invitacion.url); }
-                catch (error) { Swal.showValidationMessage('Seleccioná el enlace y copialo manualmente.'); return false; }
-            },
-        });
+        const conexiones = await $.get('/notificaciones/conexiones');
+        if (version !== versionGestionNotificaciones) return;
+        const lista = $('#lista-notificaciones').empty();
+        if (!conexiones.length) return lista.text('Todavía no hay suscripciones.');
+        const estados = { activa: 'Activa', pendiente: 'Pendiente de activación', vencida: 'Enlace vencido', inactiva: 'Inactiva' };
+        for (const conexion of conexiones) {
+            const fila = $('<div class="d-flex flex-wrap align-items-center gap-2 py-2 border-bottom"></div>');
+            const descripcion = $('<div class="flex-grow-1"></div>');
+            descripcion.append($('<strong></strong>').text(conexion.nombre));
+            descripcion.append($('<div class="small text-secondary"></div>').text(estados[conexion.estado] || 'Inactiva'));
+            fila.append(descripcion);
+            if (conexion.estado === 'pendiente') fila.append($('<button type="button" class="btn btn-sm btn-outline-secondary">Copiar enlace</button>')
+                .attr('data-copiar-notificacion', conexion.url));
+            if (conexion.estado === 'activa') fila.append($('<button type="button" class="btn btn-sm btn-outline-secondary">Probar notificación</button>')
+                .attr('data-probar-notificacion', conexion.id));
+            fila.append($('<button type="button" class="btn btn-sm btn-outline-danger">Quitar</button>')
+                .attr('data-quitar-notificacion', conexion.id).attr('data-nombre', conexion.nombre));
+            lista.append(fila);
+        }
     } catch (error) {
-        Swal.fire({ icon: 'error', text: error.responseJSON?.error || 'No se pudo crear la invitación.' });
-    } finally {
-        $('#btn-notificaciones').prop('disabled', false);
+        if (version === versionGestionNotificaciones) $('#lista-notificaciones').text(error.responseJSON?.error || 'No se pudieron cargar las suscripciones.');
     }
 }
 
-$('#btn-notificaciones').on('click', crearInvitacionNotificaciones);
+function abrirGestionNotificaciones() {
+    versionGestionNotificaciones++;
+    document.getElementById('modal-notificaciones').showModal();
+    $('#estado-notificaciones').text('');
+    cargarSuscripcionesNotificaciones();
+}
+
+function cerrarGestionNotificaciones() {
+    versionGestionNotificaciones++;
+    const modal = document.getElementById('modal-notificaciones');
+    if (modal.open) modal.close();
+    $('#nombre-notificacion, #enlace-notificacion').val('');
+    $('#enlace-notificacion-contenedor').prop('hidden', true);
+    $('#estado-notificaciones, #lista-notificaciones').empty();
+}
+
+async function crearInvitacionNotificaciones(evento) {
+    evento.preventDefault();
+    const nombre = $('#nombre-notificacion').val().trim();
+    const version = versionGestionNotificaciones;
+    if (!nombre) { $('#estado-notificaciones').text('Ingresá un nombre para generar el enlace.'); return; }
+    $('#generar-notificacion').prop('disabled', true);
+    $('#estado-notificaciones').text('Generando enlace…');
+    try {
+        const invitacion = await $.ajax({ url: '/notificaciones/tokens', method: 'POST', contentType: 'application/json', data: JSON.stringify({ nombre }) });
+        if (version !== versionGestionNotificaciones) return;
+        $('#enlace-notificacion').val(invitacion.url);
+        $('#enlace-notificacion-contenedor').prop('hidden', false);
+        $('#nombre-notificacion').val('');
+        try {
+            await navigator.clipboard.writeText(invitacion.url);
+            $('#estado-notificaciones').text('Enlace de notificación copiado al portapapeles. Compartilo con el vendedor.');
+        } catch (error) {
+            $('#estado-notificaciones').text('Enlace generado. Copialo manualmente y compartilo con el vendedor.');
+        }
+        await cargarSuscripcionesNotificaciones();
+    } catch (error) {
+        if (version === versionGestionNotificaciones) $('#estado-notificaciones').text(error.responseJSON?.error || 'No se pudo generar el enlace.');
+    } finally {
+        $('#generar-notificacion').prop('disabled', false);
+    }
+}
+
+async function copiarEnlaceNotificaciones() {
+    const url = $(this).attr('data-copiar-notificacion');
+    $('#enlace-notificacion').val(url);
+    $('#enlace-notificacion-contenedor').prop('hidden', false);
+    try {
+        await navigator.clipboard.writeText(url);
+        $('#estado-notificaciones').text('Enlace de notificación copiado al portapapeles. Compartilo con el vendedor.');
+    } catch (error) {
+        $('#estado-notificaciones').text('No se pudo copiar automáticamente. Seleccioná el enlace y copialo manualmente.');
+    }
+}
+
+async function quitarSuscripcionNotificaciones() {
+    const boton = $(this);
+    if (!window.confirm('¿Querés quitar la suscripción de ' + boton.attr('data-nombre') + '? También se quitarán los registros que compartan ese dispositivo.')) return;
+    boton.prop('disabled', true);
+    try {
+        await $.ajax({ url: '/notificaciones/conexiones/' + encodeURIComponent(boton.attr('data-quitar-notificacion')), method: 'DELETE' });
+        $('#estado-notificaciones').text('Suscripción quitada.');
+    } catch (error) {
+        $('#estado-notificaciones').text(error.responseJSON?.error || 'No se pudo quitar la suscripción.');
+    }
+    await cargarSuscripcionesNotificaciones();
+}
+
+async function probarSuscripcionNotificaciones() {
+    const boton = $(this);
+    boton.prop('disabled', true);
+    $('#estado-notificaciones').text('Enviando notificación de prueba…');
+    try {
+        await $.post('/notificaciones/conexiones/' + encodeURIComponent(boton.attr('data-probar-notificacion')) + '/probar');
+        $('#estado-notificaciones').text('Prueba enviada al servicio de notificaciones. Revisá el dispositivo.');
+    } catch (error) {
+        $('#estado-notificaciones').text(error.responseJSON?.error || 'No se pudo enviar la notificación de prueba.');
+    }
+    await cargarSuscripcionesNotificaciones();
+}
+
+$('#btn-notificaciones').on('click', abrirGestionNotificaciones);
+$('#form-notificaciones').on('submit', crearInvitacionNotificaciones);
+$('#lista-notificaciones').on('click', '[data-copiar-notificacion]', copiarEnlaceNotificaciones);
+$('#lista-notificaciones').on('click', '[data-quitar-notificacion]', quitarSuscripcionNotificaciones);
+$('#lista-notificaciones').on('click', '[data-probar-notificacion]', probarSuscripcionNotificaciones);
+$('[data-cerrar-notificaciones]').on('click', cerrarGestionNotificaciones);
+$('#modal-notificaciones').on('cancel', function cerrarNotificacionesConEscape(evento) { evento.preventDefault(); cerrarGestionNotificaciones(); });
 $('#btn-descargar-prompts').on('click', descargarPrompts);
 $('#btn-cargar-prompts').on('click', function elegirArchivoPrompts() {
     if (!guardandoPrompt && promptActual) $('#archivo-prompts').trigger('click');
@@ -738,6 +852,7 @@ $('#btn-orden-ultimas').on('click', () => cambiarVistaListado('ultimas'));
 $('#btn-orden-pendientes').on('click', () => cambiarVistaListado('pendientes'));
 $('#buscar-conversacion').on('input', listarConversaciones);
 $('#btn-enviar-mensaje').on('click', enviarMensaje);
+$('#btn-aceptar-envio-manual').on('click', aceptarAvisoEnvioManual);
 $('#btn-cerrar-sesion').on('click', cerrarSesion);
 $('#btn-metricas').on('click', mostrarMetricas);
 $('[data-cerrar-metricas]').on('click', cerrarMetricas);

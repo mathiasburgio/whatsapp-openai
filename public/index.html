@@ -205,7 +205,13 @@
         .mensaje-transcripcion { margin-top: 8px; color: #50616a; }
         .media-error { color: #9b3434; font-size: 12px; }
         .mensaje-meta { display: flex; justify-content: flex-end; align-items: center; gap: 5px; margin-top: 4px; color: var(--secundario); font-size: 10px; }
-        .compositor { display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-top: 1px solid var(--borde); background: var(--superficie); }
+        .compositor { display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--borde); background: var(--superficie); }
+        .compositor-controles, .aviso-envio-manual { grid-area: 1 / 1; }
+        .compositor-controles { display: flex; align-items: center; gap: 12px; padding: 16px 22px; }
+        .aviso-envio-manual { z-index: 1; display: flex; align-items: center; justify-content: center; gap: 16px; padding: 16px 22px; background: #dfe3e5ed; }
+        .aviso-envio-manual[hidden] { display: none; }
+        .aviso-envio-manual p { flex: 1 1 200px; min-width: 0; margin: 0; color: #33434a; font-size: 13px; line-height: 1.4; }
+        .aviso-envio-manual strong { display: block; }
         .compositor textarea { height: 46px; min-height: 46px; resize: none; padding: 11px 14px; border: 0; border-radius: 8px; font-size: 14px; }
         .compositor .btn { flex-shrink: 0; padding-inline: 20px; }
         .controles-simulador { flex-shrink: 0; padding: 10px 16px; border-top: 1px solid #d7c794; background: #fff8e8; }
@@ -238,7 +244,8 @@
             .contexto-item { flex-basis: 100%; }
             .mensajes { gap: 10px; padding: 20px 12px; }
             .mensaje { max-width: 96%; padding: 8px 10px 5px; font-size: 13px; }
-            .compositor { flex-wrap: wrap; gap: 8px; padding: 12px; }
+            .compositor-controles { flex-wrap: wrap; gap: 8px; padding: 12px; }
+            .aviso-envio-manual { flex-wrap: wrap; gap: 8px; padding: 12px; }
             .compositor textarea { width: 100%; font-size: 12px; }
             .compositor .btn { margin-left: auto; padding-inline: 14px; min-height: 40px; font-size: 12px; }
             .login-card { padding: 28px; }
@@ -270,7 +277,7 @@
             <h1 class="titulo-panel">WhatsApp</h1>
             <button id="btn-simulador" type="button" class="btn btn-outline-secondary">Test · Simulador</button>
             <button id="btn-prompts" type="button" class="btn btn-outline-secondary">Prompts</button>
-            <button id="btn-notificaciones" type="button" class="btn btn-outline-secondary">Invitar a notificaciones</button>
+            <button id="btn-notificaciones" type="button" class="btn btn-outline-secondary">Gestionar notificaciones</button>
             <button id="btn-metricas" type="button" class="btn btn-outline-secondary"><i class="fa-solid fa-chart-simple me-1" aria-hidden="true"></i> Métricas del mes</button>
             <button id="btn-cerrar-sesion" type="button" class="btn btn-outline-secondary"><i class="fa-solid fa-right-from-bracket me-1" aria-hidden="true"></i> Cerrar sesión</button>
         </header>
@@ -333,6 +340,11 @@
                     <button id="btn-grabar-simulador" type="button" class="btn btn-sm btn-outline-danger">Grabar audio</button>
                     <button id="btn-limpiar-simulador" type="button" class="btn btn-sm btn-outline-danger">Limpiar y empezar de cero</button>
                 </div>
+                <div class="form-check form-switch mt-2">
+                    <input class="form-check-input" type="checkbox" role="switch" id="notificaciones-simulador">
+                    <label class="form-check-label small" for="notificaciones-simulador">Enviar notificaciones de prueba a los dispositivos suscriptos</label>
+                </div>
+                <p class="nota-simulador">Esta opción se comparte entre los administradores y envía avisos reales identificados como Test cuando se solicita una intervención.</p>
                 <p class="nota-simulador">Enviás como cliente Test. La respuesta aparece en este chat. Cada mensaje reinicia la espera; luego se suma el procesamiento de IA. Usa IA real y consume su cupo.</p>
                 <p id="estado-simulador" class="nota-simulador" role="status" aria-live="polite"></p>
                 <div id="adjunto-simulador" class="adjunto-simulador" hidden>
@@ -343,9 +355,15 @@
             </section>
 
             <div class="compositor">
-                <label for="texto-mensaje" class="visually-hidden">Escribir un mensaje</label>
-                <textarea id="texto-mensaje" class="form-control" rows="1" maxlength="4096" placeholder="Escribí un mensaje" disabled></textarea>
-                <button id="btn-enviar-mensaje" type="button" class="btn btn-enviar" disabled>Enviar <i class="fa-solid fa-paper-plane ms-1" aria-hidden="true"></i></button>
+                <div id="controles-envio" class="compositor-controles">
+                    <label for="texto-mensaje" class="visually-hidden">Escribir un mensaje</label>
+                    <textarea id="texto-mensaje" class="form-control" rows="1" maxlength="4096" placeholder="Escribí un mensaje" disabled></textarea>
+                    <button id="btn-enviar-mensaje" type="button" class="btn btn-enviar" disabled>Enviar <i class="fa-solid fa-paper-plane ms-1" aria-hidden="true"></i></button>
+                </div>
+                <div id="aviso-envio-manual" class="aviso-envio-manual" aria-label="Aviso sobre el envío manual" hidden>
+                    <p><strong>Cada mensaje confirmado desde el panel consume la cuota mensual de mensajes de WhatsApp.</strong> También podés responder desde WhatsApp en tu teléfono.</p>
+                    <button id="btn-aceptar-envio-manual" type="button" class="btn btn-enviar">Aceptar</button>
+                </div>
             </div>
         </section>
     </main>
@@ -390,6 +408,35 @@
                 <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-cerrar-metricas>Cerrar</button></div>
     </dialog>
 
+    <dialog class="metricas-modal" id="modal-notificaciones" aria-labelledby="titulo-notificaciones">
+        <div class="modal-header">
+            <h2 class="modal-title fs-5" id="titulo-notificaciones">Gestionar notificaciones</h2>
+            <button type="button" class="btn-close" data-cerrar-notificaciones aria-label="Cerrar notificaciones"></button>
+        </div>
+        <div class="modal-body">
+            <p class="small text-secondary">Generá un enlace para cada vendedor o dispositivo y compartilo para que active los avisos.</p>
+            <form id="form-notificaciones">
+                <label class="form-label" for="nombre-notificacion">Nombre del vendedor o dispositivo</label>
+                <div class="d-flex flex-wrap gap-2">
+                    <input id="nombre-notificacion" class="form-control flex-grow-1" style="width: 200px" maxlength="100" required placeholder="Ej.: María · celular">
+                    <button id="generar-notificacion" type="submit" class="btn btn-enviar">Generar enlace</button>
+                </div>
+            </form>
+            <p id="estado-notificaciones" class="small mt-3 mb-0" role="status" aria-live="polite"></p>
+            <div id="enlace-notificacion-contenedor" class="mt-2" hidden>
+                <label class="form-label" for="enlace-notificacion">Enlace para compartir</label>
+                <input id="enlace-notificacion" class="form-control" readonly>
+                <p class="small text-secondary mt-1 mb-0">Si no se copió automáticamente, seleccionalo y copialo. El enlace se usa una sola vez y vence en 60 minutos.</p>
+            </div>
+            <hr>
+            <h3 class="fs-6">Suscripciones</h3>
+            <p class="small text-secondary">Cada suscripción corresponde a un navegador o dispositivo. Podés enviarle una prueba o quitarla.</p>
+            <div id="lista-notificaciones" aria-live="polite"></div>
+            <div class="alert alert-info small mt-3 mb-0" role="note"><strong>En iPhone:</strong> abrí el enlace en Safari, tocá <strong>Compartir → Agregar a pantalla de inicio</strong>. Después abrí la página desde el inicio y aceptá las notificaciones.</div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-cerrar-notificaciones>Cerrar</button></div>
+    </dialog>
+
     <dialog class="metricas-modal" id="modal-prompts" aria-labelledby="titulo-prompts">
         <div class="modal-header">
             <h2 class="modal-title fs-5" id="titulo-prompts">Prompts</h2>
@@ -426,7 +473,7 @@
     <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/simulador.js?v=simulador-2"></script>
-    <script src="/index.js?v=notificaciones-prompts-1"></script>
+    <script src="/simulador.js?v=simulador-notificaciones-3"></script>
+    <script src="/index.js?v=notificaciones-gestion-2"></script>
 </body>
 </html>

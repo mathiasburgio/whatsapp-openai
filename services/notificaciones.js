@@ -16,12 +16,58 @@ async function crearClavesVapid(origen) {
 }
 
 async function crearTokenConexion(req, res) {
+    const nombre = typeof req.body?.nombre === 'string' ? req.body.nombre.trim() : '';
+    if (!nombre || nombre.length > 100) return res.status(400).json({ error: 'Ingresá un nombre de hasta 100 caracteres.' });
     const origen = (process.env.NOTIFICACIONES_URL_PUBLICA || req.get('origin')
         || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
     await crearClavesVapid(origen);
-    const conexion = await Conexion.create({ venceEn: new Date(Date.now() + 60 * 60 * 1000) });
+    const conexion = await Conexion.create({ nombre, venceEn: new Date(Date.now() + 60 * 60 * 1000) });
     res.json({ token: conexion._id, venceEn: conexion.venceEn,
         url: `${origen}/notificaciones/suscribirse?token=${conexion._id}` });
+}
+
+// Solo el panel puede consultar las conexiones; nunca devuelve datos privados de Web Push.
+async function listarConexiones(req, res) {
+    const conexiones = await Conexion.find().select('nombre venceEn utilizadaEn suscripcion createdAt').sort({ createdAt: -1 }).lean();
+    const ahora = Date.now();
+    const origen = (process.env.NOTIFICACIONES_URL_PUBLICA || req.get('origin')
+        || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+    res.json(conexiones.map(function describirConexion(conexion) {
+        const estado = conexion.suscripcion ? 'activa' : conexion.utilizadaEn ? 'inactiva'
+            : new Date(conexion.venceEn).getTime() > ahora ? 'pendiente' : 'vencida';
+        return { id: conexion._id, nombre: conexion.nombre || 'Sin nombre (anterior)', estado, venceEn: conexion.venceEn,
+            ...(estado === 'pendiente' ? { url: `${origen}/notificaciones/suscribirse?token=${conexion._id}` } : {}) };
+    }));
+}
+
+async function quitarConexion(req, res) {
+    const conexion = await Conexion.findById(req.params.id).lean();
+    if (!conexion) return res.status(404).json({ error: 'La suscripción ya no existe.' });
+    // Invitaciones antiguas pueden compartir el mismo navegador: quitarlas evita que siga recibiendo avisos.
+    if (conexion.suscripcion?.endpoint) await Conexion.deleteMany({ 'suscripcion.endpoint': conexion.suscripcion.endpoint });
+    else await Conexion.deleteOne({ _id: conexion._id });
+    res.json({ ok: true });
+}
+
+async function probarConexion(req, res) {
+    const conexion = await Conexion.findById(req.params.id).lean();
+    if (!conexion?.suscripcion?.endpoint) return res.status(404).json({ error: 'Esta suscripción no está activa.' });
+    const claves = await Claves.findById('vapid');
+    if (!claves) return res.status(503).json({ error: 'No están configuradas las notificaciones.' });
+    try {
+        await webpush.sendNotification(conexion.suscripcion, JSON.stringify({
+            titulo: 'Notificación de prueba', cuerpo: 'Las notificaciones de intervención están configuradas en este dispositivo.',
+            url: '/panel', tag: 'prueba-notificaciones',
+        }), { vapidDetails: { subject: claves.subject, publicKey: claves.publicKey, privateKey: claves.privateKey }, TTL: 60, timeout: 10000 });
+        res.json({ ok: true });
+    } catch (error) {
+        if (error.statusCode === 404 || error.statusCode === 410) {
+            await Conexion.updateMany({ 'suscripcion.endpoint': conexion.suscripcion.endpoint }, { $unset: { suscripcion: 1 } });
+            return res.status(410).json({ error: 'La suscripción venció o fue desactivada en el dispositivo. Generá un enlace nuevo.' });
+        }
+        console.error('No se pudo enviar la notificación de prueba:', error.message);
+        res.status(502).json({ error: 'No se pudo enviar la notificación de prueba. Intentá nuevamente.' });
+    }
 }
 
 async function obtenerInvitacion(req, res) {
@@ -51,15 +97,17 @@ async function suscribirNotificaciones(req, res) {
 
 // Se llama solamente cuando se agrega una intervención nueva, nunca al volver a leerla.
 async function notificarIntervencion(conversacion, accionId) {
-    if (conversacion.canal === 'simulador') return;
+    const esSimulacion = conversacion.canal === 'simulador';
+    if (esSimulacion && !conversacion.notificacionesSimulador) return;
     const conexiones = await Conexion.find({ suscripcion: { $ne: null } }).lean();
     // Una segunda invitación en el mismo navegador no debe duplicar los avisos.
     const suscripciones = new Map(conexiones.map(conexion => [conexion.suscripcion.endpoint, conexion.suscripcion]));
     if (!suscripciones.size) return;
     const claves = await Claves.findById('vapid');
-    const aviso = await Aviso.create({ conversacionId: conversacion._id, accionId });
+    const aviso = await Aviso.create({ conversacionId: conversacion._id, accionId,
+        ...(esSimulacion ? { versionSimulador: conversacion.versionSimulador || 0 } : {}) });
     const accion = conversacion.accionesExternasRequeridas.find(item => String(item._id) === String(accionId));
-    const contenido = JSON.stringify({ titulo: 'Se requiere intervención de un vendedor',
+    const contenido = JSON.stringify({ titulo: esSimulacion ? 'TEST · Intervención de vendedor' : 'Se requiere intervención de un vendedor',
         cuerpo: (accion?.detalle || 'Hay una consulta pendiente.').slice(0, 160),
         url: `/notificaciones/intervencion/${aviso._id}`, tag: aviso._id });
     const resultados = await Promise.allSettled([...suscripciones.values()].map(async function enviarAviso(suscripcion) {
@@ -83,8 +131,11 @@ async function obtenerIntervencion(req, res) {
     const aviso = await Aviso.findById(req.params.token);
     if (!aviso) return res.status(404).json({ error: 'Notificación no encontrada.' });
     const conversacion = await Conversacion.findById(aviso.conversacionId)
-        .select('nombre telefono resumen accionesExternasRequeridas').lean();
+        .select('nombre telefono canal versionSimulador resumen accionesExternasRequeridas').lean();
     if (!conversacion) return res.status(404).json({ error: 'Conversación no encontrada.' });
+    if (aviso.versionSimulador !== undefined && aviso.versionSimulador !== conversacion.versionSimulador) {
+        return res.status(410).json({ error: 'Esta prueba se reinició y su contexto ya no está disponible.' });
+    }
     const mensajes = await Mensaje.find({ conversacionId: aviso.conversacionId })
         .select('contenido deClienteParaSistema respuestaAutomatica fechaEmitida createdAt')
         .sort({ createdAt: -1, _id: -1 }).limit(20).lean();
@@ -96,6 +147,9 @@ router.use(function evitarCacheNotificaciones(req, res, next) {
     next();
 });
 router.post('/tokens', tieneSesion, crearTokenConexion);
+router.get('/conexiones', tieneSesion, listarConexiones);
+router.delete('/conexiones/:id', tieneSesion, quitarConexion);
+router.post('/conexiones/:id/probar', tieneSesion, probarConexion);
 router.get('/invitaciones/:token', obtenerInvitacion);
 router.post('/suscripciones', suscribirNotificaciones);
 router.get('/intervencion/:token/datos', obtenerIntervencion);

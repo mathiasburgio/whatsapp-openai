@@ -7,6 +7,7 @@ const conversacionSchema = new mongoose.Schema({deClienteParaSistema: Boolean, /
     telefono: String, //telefono del cliente
     canal: { type: String, enum: ['whatsapp', 'simulador'], default: 'whatsapp' },
     versionSimulador: { type: Number, default: 0, min: 0 }, //cambia al comenzar una prueba nueva
+    notificacionesSimulador: { type: Boolean, default: false },
     resumen: String, //resumen de la conversacion q va generando el bot
     turnosDesdeResumen: { type: Number, default: 0 },
     referralFecha: Date, //último ingreso desde un anuncio de Meta
