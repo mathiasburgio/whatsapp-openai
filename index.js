@@ -20,6 +20,7 @@ const mongoService = require('./services/mongo');
 const usuarioService = require('./services/usuarios');
 const botService = require('./services/bot');
 const accionesExternasService = require('./services/accionesExternas');
+const limpiezaMediaService = require('./services/limpiezaMedia');
 
 const cUsuarios = require('./models/usuarios');
 const cConversaciones = require('./models/conversacion');
@@ -249,6 +250,7 @@ async function iniciar(){
 
     const PORT = process.env.PORT || 3000;
     server.listen(PORT, () => {
+        limpiezaMediaService.programarLimpiezaMedia();
         console.log(`WhatsApp OpenAI service is running on port http://localhost:${PORT}`);
     });
 }
