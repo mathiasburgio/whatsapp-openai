@@ -10,7 +10,10 @@
     "probar_decisions": "node scripts/probar_openai.js decisions",
     "habilitar_usuario": "node scripts/habilitar_usuario.js",
     "deshabilitar_usuario": "node scripts/deshabilitar_usuario.js",
-    "iniciar": "node ."
+    "iniciar": "node .",
+    "pm2:start": "pm2 start index.js --name chat --max-memory-restart 512M",
+    "pm2:backuper": "pm2 start backuper.js --name backuper-chat --max-memory-restart 512M",
+    "backuper:now": "node backuper.js --now"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
